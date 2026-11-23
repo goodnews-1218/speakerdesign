@@ -34,8 +34,26 @@ else()
   if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "Vendor SDK requires Windows x64. For portable code checks use -DCONNECT_LAB_SIMULATOR=ON.")
   endif()
-  add_executable(connect_lab src/main.cpp)
+  add_executable(connect_lab src/main.cpp src/VideoCapture.cpp)
   set(lab_target connect_lab)
+  target_compile_definitions(connect_lab PRIVATE CONNECT_LAB_VIDEO=1)
+  set(CONNECT_VOICE_SDK_DIR "${CMAKE_BINARY_DIR}/voice-deps/sherpa_onnx"
+    CACHE PATH "Sherpa ONNX package directory for optional voice snapshots")
+  set(CONNECT_VOICE_MODEL_DIR "" CACHE PATH "Default local SenseVoice model directory")
+  if(EXISTS "${CONNECT_VOICE_SDK_DIR}/include/sherpa-onnx/c-api/c-api.h"
+     AND EXISTS "${CONNECT_VOICE_SDK_DIR}/lib/sherpa-onnx-c-api.lib"
+     AND EXISTS "${CONNECT_VOICE_SDK_DIR}/lib/sherpa-onnx-c-api.dll"
+     AND EXISTS "${CONNECT_VOICE_SDK_DIR}/lib/onnxruntime.dll")
+    target_sources(connect_lab PRIVATE src/VoiceSnapshot.cpp)
+    target_compile_definitions(connect_lab PRIVATE CONNECT_LAB_VOICE=1
+      "CONNECT_VOICE_MODEL_DIR=\"${CONNECT_VOICE_MODEL_DIR}\"")
+    target_include_directories(connect_lab PRIVATE "${CONNECT_VOICE_SDK_DIR}/include")
+    target_link_libraries(connect_lab PRIVATE "${CONNECT_VOICE_SDK_DIR}/lib/sherpa-onnx-c-api.lib")
+    foreach(file sherpa-onnx-c-api.dll onnxruntime.dll)
+      add_custom_command(TARGET connect_lab POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CONNECT_VOICE_SDK_DIR}/lib/${file}" "$<TARGET_FILE_DIR:connect_lab>")
+    endforeach()
+  endif()
   target_link_libraries(connect_lab PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/vendor/win64/viaim_connect_sdk.lib")
   foreach(file viaim_connect_sdk.dll opencv_world4120.dll viaim_connect_descriptions.json)
     add_custom_command(TARGET connect_lab POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
