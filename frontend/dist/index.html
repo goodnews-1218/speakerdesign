@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#146b57">
+  <meta name="description" content="声境 Connect：音箱画面、语音识别与 AI 对话的本地工作台。">
+  <title>声境 · Connect 对话工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23146b57'/%3E%3Cpath d='M16 28v8m8-16v24m8-30v36m8-30v24m8-16v8' stroke='white' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="i-wave" viewBox="0 0 24 24"><path d="M3 10v4m4-8v12m5-16v20m5-16v12m4-8v4"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2v-10A9 9 0 0 1 20 11.5Z"/><path d="M7 10h8M7 14h5"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="8" cy="7" r="3"/><circle cx="16" cy="17" r="3"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><rect x="3" y="6" width="12" height="12" rx="3"/><path d="m15 10 6-3v10l-6-3"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M9 22h6"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 2.7 6.3L21 12l-6.3 2.7L12 21l-2.7-6.3L3 12l6.3-2.7L12 3ZM20 2v4M18 4h4"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-4 4 4-4 4 4M4 15v5h16v-5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v13m-4-4 4 4 4-4M4 17v4h16v-4"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5V4ZM15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></symbol>
+    <symbol id="i-snapshot" viewBox="0 0 24 24"><path d="M8 5 9.5 3h5L16 5h5v15H3V5h5Z"/><circle cx="12" cy="12" r="4"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H5v20h14V7l-5-5Zm0 0v6h5M8 12h8M8 16h6"/></symbol>
+  </defs></svg>
+
+  <aside class="sidebar">
+    <a class="brand" href="./" aria-label="声境首页"><span class="brand-mark"><svg class="icon"><use href="#i-wave"/></svg></span><span>声境<span class="brand-en">CONNECT STUDIO</span></span></a>
+    <button class="new-session" id="new-session"><svg class="icon"><use href="#i-plus"/></svg>开启新对话<span class="key-hint">N</span></button>
+    <div class="sidebar-label">工作空间</div>
+    <button class="nav-item active" id="workspace-nav"><svg class="icon"><use href="#i-grid"/></svg>对话工作台<span class="nav-indicator"></span></button>
+    <button class="nav-item" id="history-nav"><svg class="icon"><use href="#i-clock"/></svg>对话记录<span class="nav-count" id="history-count">0</span></button>
+    <div class="history-heading"><span class="sidebar-label">最近对话</span><span class="local-label">仅本机</span></div>
+    <div class="recent-list" id="recent-list"><p class="history-empty">从一句话开始，<br>让想法被听见。</p></div>
+    <div class="sidebar-bottom">
+      <div class="device-card"><div class="device-top"><span class="mini-speaker"><span></span></span><div><strong>Connect 音箱</strong><span id="sidebar-device">设备未连接</span></div></div><button id="device-settings">配置设备连接<svg class="icon"><use href="#i-settings"/></svg></button></div>
+      <div class="workspace-user"><span class="avatar">我</span><div><strong>我的工作空间</strong><span>本地对话 · v1.0</span></div><button class="icon-button" id="sidebar-settings" aria-label="连接设置"><svg class="icon"><use href="#i-settings"/></svg></button></div>
+    </div>
+  </aside>
+
+  <div class="page-shell">
+    <header class="topbar"><div class="breadcrumbs"><span>工作空间</span><span>/</span><strong>对话工作台</strong></div><div class="topbar-actions"><button class="icon-button mobile-tool" id="mobile-new" aria-label="新对话"><svg class="icon"><use href="#i-plus"/></svg></button><button class="icon-button mobile-tool" id="mobile-history" aria-label="查看对话记录"><svg class="icon"><use href="#i-clock"/></svg></button><span class="connection-label" id="connection-label"><span class="status-dot"></span>设备未连接</span><button class="subtle-button" id="settings-button"><svg class="icon"><use href="#i-settings"/></svg>连接设置</button></div></header>
+    <main>
+      <section class="page-heading"><div><p class="eyebrow">SEE. LISTEN. UNDERSTAND.</p><h1>让对话，自然发生<span class="heading-dot">。</span></h1><p class="page-description">看见音箱的视角，听见你的想法，让 AI 接住每一句话。</p></div><button class="outline-button" id="export-button"><svg class="icon"><use href="#i-download"/></svg>导出对话</button></section>
+      <section class="mode-banner" aria-label="当前工作模式"><div><span class="demo-icon"><svg class="icon"><use href="#i-spark"/></svg></span><div><strong id="mode-title">先体验，再连接</strong><span id="mode-description">当前为演示模式，示例内容不来自音箱或大模型。</span></div></div><button id="demo-button">播放对话演示<svg class="icon"><use href="#i-play"/></svg></button></section>
+
+      <div class="workspace-grid">
+        <section class="input-column" aria-label="音视频输入">
+          <div class="panel camera-panel">
+            <div class="panel-header"><div class="panel-title"><svg class="icon"><use href="#i-camera"/></svg><h2>设备画面</h2><span class="small-label">VISION</span></div><span class="badge neutral" id="camera-state">未开启</span></div>
+            <div class="video-stage" id="video-stage">
+              <video id="camera-video" autoplay muted playsinline hidden></video>
+              <img id="camera-image" alt="音箱摄像头传来的实时画面" hidden>
+              <div class="camera-placeholder" id="camera-placeholder"><div class="lens-orbit"><span class="orbit-ring ring-one"></span><span class="orbit-ring ring-two"></span><div class="lens-core"><svg class="icon"><use href="#i-camera"/></svg></div><span class="orbit-point"></span></div><h3>给对话，多一个视角</h3><p>连接摄像头后，在这里看见实时画面</p><button class="camera-start" id="start-camera"><svg class="icon"><use href="#i-camera"/></svg>开启摄像头</button><span class="camera-footnote">可先使用电脑摄像头预览</span></div>
+              <div class="viewfinder corner-tl"></div><div class="viewfinder corner-tr"></div><div class="viewfinder corner-bl"></div><div class="viewfinder corner-br"></div>
+              <div class="video-topline"><span class="feed-label" id="feed-label">CAMERA PREVIEW</span><span id="video-dimensions">等待视频源</span></div>
+              <div class="video-bottomline"><span id="camera-source-label">尚未接入画面</span><div><button class="video-tool" id="snapshot-button" aria-label="保存当前画面" disabled><svg class="icon"><use href="#i-snapshot"/></svg></button><button class="video-tool" id="fullscreen-button" aria-label="全屏查看画面"><svg class="icon"><use href="#i-expand"/></svg></button></div></div>
+            </div>
+            <div class="camera-footer"><label class="select-wrap"><svg class="icon"><use href="#i-camera"/></svg><select id="camera-source" aria-label="选择画面来源"><option value="browser">电脑 / USB 摄像头</option><option value="service">音箱视频服务</option><option value="file">本地视频文件</option></select><svg class="icon chevron"><use href="#i-chevron"/></svg></label><button class="text-button" id="camera-toggle">开启预览</button></div>
+          </div>
+
+          <div class="panel audio-panel"><div class="panel-header"><div class="panel-title"><svg class="icon"><use href="#i-mic"/></svg><h2>语音输入</h2><span class="small-label">VOICE</span></div><span class="recording-time" id="recording-time">00:00</span></div><div class="waveform" id="waveform" aria-hidden="true"></div><div class="audio-status"><span id="audio-status">准备好，开始说话</span><span id="audio-source-label">演示输入</span></div><div class="audio-actions"><button class="primary-button record-button" id="record-button"><svg class="icon"><use href="#i-mic"/></svg><span>开始语音输入</span></button><button class="outline-button upload-button" id="upload-button"><svg class="icon"><use href="#i-upload"/></svg>导入音频</button></div><p class="audio-note" id="audio-note">演示模式使用示例文本，不会开启麦克风。</p><audio id="audio-preview" controls hidden></audio></div>
+          <div class="flow-strip"><span><span class="flow-node" id="flow-listen"><svg class="icon"><use href="#i-mic"/></svg></span>听见</span><i></i><span><span class="flow-node" id="flow-read"><svg class="icon"><use href="#i-file"/></svg></span>理解</span><i></i><span><span class="flow-node" id="flow-answer"><svg class="icon"><use href="#i-spark"/></svg></span>回应</span><i></i><span><span class="flow-node" id="flow-speak"><svg class="icon"><use href="#i-volume"/></svg></span>播放</span></div>
+        </section>
+
+        <section class="conversation-column" aria-label="识别文字与模型回答">
+          <div class="panel transcript-panel"><div class="panel-header"><div class="panel-title"><span class="section-icon sand"><svg class="icon"><use href="#i-wave"/></svg></span><h2>你说的话</h2></div><span class="badge neutral" id="transcript-badge">示例文字</span></div><div class="transcript-content"><label class="sr-only" for="transcript">语音识别文本，可手动修改</label><textarea id="transcript" placeholder="识别出的文字会显示在这里，也可以直接输入问题。" maxlength="12000">你好，介绍一下你能帮我做什么吧。</textarea><div class="transcript-meta"><span id="transcript-status"><svg class="icon"><use href="#i-file"/></svg>识别文字可编辑</span><span id="character-count">19 字</span></div></div><div class="transcript-footer"><span>说出来，或写下来。</span><button class="send-button" id="send-button"><svg class="icon"><use href="#i-spark"/></svg><span>发送给 AI</span></button></div></div>
+
+          <div class="panel answer-panel"><div class="panel-header"><div class="panel-title"><span class="section-icon mint"><svg class="icon"><use href="#i-spark"/></svg></span><h2>AI 的回答</h2></div><span class="badge green" id="answer-badge">演示回答</span></div><div class="answer-content" id="answer-content" aria-live="polite" aria-busy="false"><p class="answer-greeting">你好，我是你的语音助手。</p><p>从一句话开始，我可以成为你身边的灵感搭档。</p><div class="answer-feature"><span>聊一聊</span><p>回答问题、整理思路，让复杂的事情更清楚。</p></div><div class="answer-feature"><span>看一看</span><p>画面预览已准备好；视觉理解需要后续接入模型。</p></div><div class="answer-feature"><span>听一听</span><p>把回答读给你听，让交流更自然。</p></div><p class="demo-answer-note">这是示例回答。连接模型服务后，这里将显示真实回复。</p></div><div class="answer-footer"><span id="answer-model"><span class="model-mark">✳</span>演示助手</span><div><button class="icon-button" id="copy-answer" aria-label="复制回答"><svg class="icon"><use href="#i-copy"/></svg></button><button class="listen-button" id="speak-answer"><svg class="icon"><use href="#i-volume"/></svg><span>朗读回答</span></button></div></div></div>
+          <div class="conversation-tip"><svg class="icon"><use href="#i-check"/></svg><span>对话记录保存在当前浏览器，随时可以导出。</span></div>
+        </section>
+      </div>
+      <footer class="page-footer"><span>CONNECT STUDIO <span class="footer-divider">/</span> 为自然的交流而设计</span><span id="footer-status">音箱未连接 · 模型未连接</span></footer>
+    </main>
+  </div>
+
+  <dialog id="settings-dialog" class="settings-dialog"><form id="settings-form"><div class="dialog-header"><div><p class="eyebrow">MAKE A CONNECTION</p><h2>连接你的设备与模型</h2></div><button class="icon-button" type="button" data-close="settings-dialog" aria-label="关闭设置"><svg class="icon"><use href="#i-close"/></svg></button></div><p class="dialog-description">先用演示熟悉流程，再切换到真实输入。摄像头只在手动开启后使用。</p><label class="field-label" for="mode-select">工作模式</label><div class="select-wrap dialog-select"><select id="mode-select"><option value="demo">演示模式 · 无需设备和模型</option><option value="browser">电脑麦克风 · 浏览器语音识别</option><option value="service">音箱服务 · 真实设备采集</option></select><svg class="icon chevron"><use href="#i-chevron"/></svg></div><p class="field-help" id="mode-help">示例对话仅演示交互，不会调用大模型。</p><label class="field-label" for="service-url">电脑端服务地址</label><input id="service-url" type="url" placeholder="http://127.0.0.1:8765" autocomplete="off"><p class="field-help">用于接收识别文字、发送问题和读取设备状态。模型密钥保留在服务端。</p><label class="field-label" for="video-url">音箱画面地址（可选）</label><input id="video-url" type="url" placeholder="http://127.0.0.1:8765/api/video.mjpeg" autocomplete="off"><p class="field-help">支持 MJPEG、图片流或浏览器可播放的视频地址。先启动设备视频服务。</p><div class="settings-result" id="settings-result" role="status">尚未检测服务</div><div class="dialog-footer"><button class="outline-button" type="button" id="test-connection">检测服务</button><button class="primary-button" type="submit">保存设置</button></div></form></dialog>
+
+  <dialog id="history-dialog" class="history-dialog"><div class="dialog-header"><div><p class="eyebrow">YOUR CONVERSATIONS</p><h2>对话记录</h2></div><button class="icon-button" data-close="history-dialog" aria-label="关闭对话记录"><svg class="icon"><use href="#i-close"/></svg></button></div><div id="history-list"></div><div class="dialog-footer"><span class="field-help">最多保留最近 30 条，仅保存在本机。</span><button class="danger-button" id="clear-history">清空记录</button></div></dialog>
+  <div class="toast" id="toast" role="status" hidden></div>
+  <input id="audio-file" type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.webm" hidden>
+  <input id="video-file" type="file" accept="video/*,.mp4,.webm,.mov" hidden>
+</body>
+</html>

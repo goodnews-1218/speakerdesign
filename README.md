@@ -1,5 +1,14 @@
 # Windows Connect classroom project
 
+## 本地语音与画面对话页面
+
+新增前端位于 `frontend/`。双击 `frontend/start.cmd` 可启动本地服务并打开页面，
+也可运行 `python frontend/serve.py` 后访问 `http://127.0.0.1:4173`。
+页面展示摄像头画面、语音识别文字和模型回答，提供演示模式、历史记录及导出。
+真实音箱采集和大模型需要配套电脑端服务；接入方式见 [前端说明](frontend/README.md)。
+
+## 原课程项目说明
+
 课程包 v1.1。真实设备目标为 Windows x64 + Visual Studio 2022 C++ 工具链 + CMake 3.24+。
 Trae 编辑代码；CMake 和 MSVC 编译。基础实验不需要安装 Qt，不打开摄像头，不接入云端转写。
 
