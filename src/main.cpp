@@ -54,6 +54,7 @@ struct Context {
 #endif
 #ifdef CONNECT_LAB_VOICE
     std::unique_ptr<VoiceSnapshot> voice;
+    bool voiceChat=false;
 #endif
 
     void writer() noexcept {
@@ -67,9 +68,14 @@ struct Context {
                     if(blocks.empty() && quitWriter) break;
                     b=std::move(blocks.front()); blocks.pop_front(); queuedBytes-=b.bytes.size();
                 }
-                auto& file=b.mic?mic:spk;
-                if(!file) file=std::make_unique<WavWriter>(directory/(b.mic?"mic.wav":"spk.wav"));
-                file->append(b.bytes.data(),b.bytes.size());
+#ifdef CONNECT_LAB_VOICE
+                if(!voiceChat)
+#endif
+                {
+                    auto& file=b.mic?mic:spk;
+                    if(!file) file=std::make_unique<WavWriter>(directory/(b.mic?"mic.wav":"spk.wav"));
+                    file->append(b.bytes.data(),b.bytes.size());
+                }
                 (b.mic?micBytes:spkBytes).fetch_add(b.bytes.size());
 #ifdef CONNECT_LAB_VOICE
                 if(b.mic && voice) voice->submit(b.bytes);
@@ -211,7 +217,7 @@ int main(int argc,char** argv) {
     std::filesystem::path output="recordings";
     bool recordVideo=false;
 #ifdef CONNECT_LAB_VOICE
-    bool voiceSnapshot=false;
+    bool voiceSnapshot=false, voiceChat=false;
 #endif
     try {
         for(int i=1;i<argc;) {
@@ -221,10 +227,14 @@ int main(int argc,char** argv) {
                 std::cout<<"With --video, press S in the terminal to save a snapshot while recording.\n";
 #ifdef CONNECT_LAB_VOICE
                 std::cout<<"Add --voice-snapshot with --video and a microphone mode for offline Chinese commands.\n";
+                std::cout<<"For a spoken DeepSeek conversation, launch scripts/voice_chat.py.\n";
 #endif
                 return 0;
             }
             if(key=="--video") {recordVideo=true;continue;}
+#ifdef CONNECT_LAB_VOICE
+            if(key=="--voice-chat-input") {voiceChat=true;continue;}
+#endif
             if(key=="--voice-snapshot") {
 #ifdef CONNECT_LAB_VOICE
                 voiceSnapshot=true;
@@ -250,6 +260,9 @@ int main(int argc,char** argv) {
 #ifdef CONNECT_LAB_VOICE
         if(voiceSnapshot && (!recordVideo || mode=="spk"))
             throw std::runtime_error("--voice-snapshot requires --video and microphone audio");
+        if(voiceChat && (recordVideo || voiceSnapshot || mode!="mic" ||
+            GetFileType(GetStdHandle(STD_INPUT_HANDLE))!=FILE_TYPE_PIPE))
+            throw std::runtime_error("Use scripts/voice_chat.py for standalone microphone conversation");
 #endif
 #ifndef CONNECT_LAB_VIDEO
         if(recordVideo) throw std::runtime_error("--video is available only in the Windows hardware build");
@@ -257,19 +270,28 @@ int main(int argc,char** argv) {
     } catch(const std::exception& e) {log(e.what());return 2;}
     std::signal(SIGINT,signalHandler);
     Context c;
+#ifdef CONNECT_LAB_VOICE
+    c.voiceChat=voiceChat;
+#endif
     // Unique session directory; never silently overwrite an earlier recording.
     auto stamp=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     c.directory=output/("session-"+std::to_string(stamp));
     try {
-        if(!std::filesystem::create_directories(c.directory)) throw std::runtime_error("Session directory already exists");
+#ifdef CONNECT_LAB_VOICE
+        if(!voiceChat)
+#endif
+        {
+            if(!std::filesystem::create_directories(c.directory)) throw std::runtime_error("Session directory already exists");
+        }
 #ifdef CONNECT_LAB_VIDEO
         if(recordVideo) c.video=std::make_unique<VideoCapture>(c.directory);
 #endif
 #ifdef CONNECT_LAB_VOICE
-        if(voiceSnapshot) {
+        if(voiceSnapshot || voiceChat) {
             log("Loading local voice recognition model");
-            c.voice=std::make_unique<VoiceSnapshot>(*c.video,
-                +[](const std::string& message) { log(message); });
+            const auto voiceLog=+[](const std::string& message) { log(message); };
+            c.voice=voiceChat ? std::make_unique<VoiceSnapshot>(voiceLog)
+                              : std::make_unique<VoiceSnapshot>(*c.video,voiceLog);
             c.voice->start();
         }
 #endif
@@ -325,12 +347,24 @@ int main(int argc,char** argv) {
         }
 #endif
 #ifdef CONNECT_LAB_VOICE
-        if(c.voice) log("Voice snapshots active; say 拍照, 照相, or 拍张照片, then pause");
+        if(voiceChat) log("VOICE_CHAT_READY");
+        else if(c.voice) log("Voice snapshots active; say 拍照, 照相, or 拍张照片, then pause");
 #endif
         log("Recording active; Ctrl+C stops early");
         auto end=std::chrono::steady_clock::now()+std::chrono::seconds(seconds);
         auto next=std::chrono::steady_clock::now()+1s;
-        while(std::chrono::steady_clock::now()<end && !interrupted && !c.ioFailed) {
+        while(!interrupted && !c.ioFailed) {
+#ifdef CONNECT_LAB_VOICE
+            if(voiceChat) {
+                const HANDLE input=GetStdHandle(STD_INPUT_HANDLE);
+                DWORD available=0, received=0;
+                char command=0;
+                if(!PeekNamedPipe(input,nullptr,0,nullptr,&available,nullptr) ||
+                    (available && (!ReadFile(input,&command,1,&received,nullptr) || command=='Q'))) break;
+                if(command=='R') c.voice->resume();
+            } else
+#endif
+            if(std::chrono::steady_clock::now()>=end) break;
             if(c.state!=VIAIM_CONNECT_CONNECTION_CONNECTED || !c.acceptAudio)
                 throw std::runtime_error("Device disconnected; recording is incomplete");
 #ifdef CONNECT_LAB_VIDEO
@@ -342,7 +376,11 @@ int main(int argc,char** argv) {
             }
 #endif
             if(std::chrono::steady_clock::now()>=next) {
-                log("MIC_BYTES="+std::to_string(c.micBytes)+" SPK_BYTES="+std::to_string(c.spkBytes));next+=1s;
+#ifdef CONNECT_LAB_VOICE
+                if(!voiceChat)
+#endif
+                    log("MIC_BYTES="+std::to_string(c.micBytes)+" SPK_BYTES="+std::to_string(c.spkBytes));
+                next+=1s;
             }
             std::this_thread::sleep_for(50ms);
         }
@@ -370,7 +408,10 @@ int main(int argc,char** argv) {
     log("MIC_BYTES="+std::to_string(c.micBytes)+" SPK_BYTES="+std::to_string(c.spkBytes)+
         " DROPPED="+std::to_string(c.dropped)+" REJECTED="+std::to_string(c.rejected));
     log(recordingSummary(c.micBytes));
-    log("OUTPUT="+c.directory.string());
+#ifdef CONNECT_LAB_VOICE
+    if(!voiceChat)
+#endif
+        log("OUTPUT="+c.directory.string());
     bool hasAudio=(mode=="mic"?c.micBytes>0:mode=="spk"?c.spkBytes>0:c.micBytes>0 && c.spkBytes>0);
     bool ok=recorded && stopConfirmed && hasAudio && !c.ioFailed && c.dropped==0 && c.rejected==0 &&
         cameraResult==VIAIM_CONNECT_OK && closeResult==VIAIM_CONNECT_OK && destroyResult==VIAIM_CONNECT_OK && videoOk;

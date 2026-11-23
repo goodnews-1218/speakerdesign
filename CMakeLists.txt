@@ -39,7 +39,9 @@ else()
   target_compile_definitions(connect_lab PRIVATE CONNECT_LAB_VIDEO=1)
   set(CONNECT_VOICE_SDK_DIR "${CMAKE_BINARY_DIR}/voice-deps/sherpa_onnx"
     CACHE PATH "Sherpa ONNX package directory for optional voice snapshots")
-  set(CONNECT_VOICE_MODEL_DIR "" CACHE PATH "Default local SenseVoice model directory")
+  set(CONNECT_VOICE_MODEL_DIR
+    "${CMAKE_BINARY_DIR}/voice-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
+    CACHE PATH "Default local SenseVoice model directory")
   if(EXISTS "${CONNECT_VOICE_SDK_DIR}/include/sherpa-onnx/c-api/c-api.h"
      AND EXISTS "${CONNECT_VOICE_SDK_DIR}/lib/sherpa-onnx-c-api.lib"
      AND EXISTS "${CONNECT_VOICE_SDK_DIR}/lib/sherpa-onnx-c-api.dll"

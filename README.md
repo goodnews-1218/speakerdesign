@@ -41,6 +41,34 @@ WAV 为 16000 Hz、单声道、16-bit。双击 mic.wav 在本地播放器回听�
 示例值是 Windows SDK 默认值，不能保证适用于全部型号。不要照抄 macOS SDK 的设备 ID 或头文件。
 一台电脑只接一台目标 Connect。设备未响应、无 PCM、只有排队成功或只有一条响应，都不能记为通过。
 
+## 可选语音功能
+
+使用 Windows x64 的 Python 3.12–3.14 下载 Kokoro 播报模型、SenseVoice 识别模型及
+Sherpa-ONNX 运行时。脚本从官方发布页下载固定版本并校验 SHA-256，写入被 Git 忽略的
+`build-student`。在项目目录执行：
+
+```powershell
+python -B .\scripts\download_voice_models.py
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1
+```
+
+构建需要终端可以找到 `cmake` 和 `ctest`。如果以前配置过不同的模型路径，可把
+`CONNECT_VOICE_MODEL_DIR` 环境变量设为下载后的 SenseVoice 文件夹。
+
+语音对话需要在 `scripts/deepseek.local.toml` 中填入 `api_key = "你的 Key"`，或在当前终端
+设置 `DEEPSEEK_API_KEY`。配置文件已被 Git 忽略。把 Connect 设为 Windows 默认声音输出，
+用安装依赖时的同一个 Python 运行：
+
+```powershell
+python -B -X utf8 .\scripts\voice_chat.py
+```
+
+录像需要 FFmpeg 在 `PATH` 中。录像时按 `S` 可以保存截图，启用语音抓拍后也可说「拍张照片」：
+
+```powershell
+.\build-student\Release\connect_lab.exe --video --voice-snapshot --mode mic --seconds 30
+```
+
 ## 学生任务
 
 src/LessonTask.h 的 recordingSummary 是可运行占位实现。只修改它，输出

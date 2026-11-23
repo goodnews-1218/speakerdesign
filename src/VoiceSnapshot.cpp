@@ -60,7 +60,10 @@ bool isPhotoCommand(std::string text) {
 } // namespace
 
 VoiceSnapshot::VoiceSnapshot(VideoCapture& video, void (*log)(const std::string&))
-    : video_(video), log_(log), recognizer_(createRecognizer()) {}
+    : video_(&video), log_(log), recognizer_(createRecognizer()) {}
+
+VoiceSnapshot::VoiceSnapshot(void (*log)(const std::string&))
+    : video_(nullptr), log_(log), recognizer_(createRecognizer()) {}
 
 VoiceSnapshot::~VoiceSnapshot() {
     stop();
@@ -73,7 +76,7 @@ void VoiceSnapshot::start() {
 
 void VoiceSnapshot::submit(const std::vector<uint8_t>& pcm) noexcept {
     std::lock_guard lock(mutex_);
-    if (stopping_) return;
+    if (stopping_ || paused_) return;
     if (pcm.size() > maxQueuedBytes - queuedBytes_) {
         queue_.clear();
         queuedBytes_ = 0;
@@ -87,6 +90,11 @@ void VoiceSnapshot::submit(const std::vector<uint8_t>& pcm) noexcept {
     } catch (const std::exception&) {
         gap_ = true;
     }
+}
+
+void VoiceSnapshot::resume() {
+    std::lock_guard lock(mutex_);
+    paused_ = false;
 }
 
 void VoiceSnapshot::stop() {
@@ -105,6 +113,8 @@ void VoiceSnapshot::listen() noexcept {
         std::vector<float> utterance;
         size_t filled = 0, voiced = 0, silence = 0;
         bool discard = false;
+        const size_t silenceLimit = video_ ? 16 : 28;
+        const size_t utteranceLimit = (video_ ? 3 : 20) * sampleRate;
 
         for (;;) {
             std::vector<uint8_t> pcm;
@@ -131,10 +141,10 @@ void VoiceSnapshot::listen() noexcept {
                 float energy = 0;
                 for (const float value : frame) energy += value * value;
                 const bool speech = energy / frameSize >= 0.002f * 0.002f;
-                silence = speech ? 0 : (silence < 16 ? silence + 1 : 16);
+                silence = speech ? 0 : (silence < silenceLimit ? silence + 1 : silenceLimit);
 
                 if (discard) {
-                    if (silence >= 16) discard = false;
+                    if (silence >= silenceLimit) discard = false;
                     continue;
                 }
                 if (utterance.empty() && !speech) {
@@ -149,9 +159,9 @@ void VoiceSnapshot::listen() noexcept {
                 }
                 utterance.insert(utterance.end(), frame.begin(), frame.end());
                 if (speech) ++voiced;
-                if (silence >= 16 || utterance.size() >= 3 * sampleRate) {
-                    if (silence >= 16 && voiced >= 6) recognize(utterance);
-                    discard = silence < 16;
+                if (silence >= silenceLimit || utterance.size() >= utteranceLimit) {
+                    if ((silence >= silenceLimit || !video_) && voiced >= 6) recognize(utterance);
+                    discard = video_ && silence < silenceLimit;
                     utterance.clear();
                     voiced = 0;
                 }
@@ -174,9 +184,22 @@ void VoiceSnapshot::recognize(const std::vector<float>& samples) {
     std::unique_ptr<const SherpaOnnxOfflineRecognizerResult,
                     decltype(&SherpaOnnxDestroyOfflineRecognizerResult)>
         result(SherpaOnnxGetOfflineStreamResult(stream.get()), SherpaOnnxDestroyOfflineRecognizerResult);
-    if (!result || !result->text || !isPhotoCommand(result->text)) return;
+    if (!result || !result->text || !*result->text) return;
+    std::string text(result->text);
+    if (video_ && !isPhotoCommand(text)) return;
 
     std::lock_guard lock(mutex_);
-    if (!stopping_ && !gap_ && video_.requestSnapshot())
-        log_(std::string("VOICE_SNAPSHOT_REQUESTED=") + result->text);
+    if (stopping_ || gap_ || paused_) return;
+    if (video_) {
+        if (video_->requestSnapshot()) log_("VOICE_SNAPSHOT_REQUESTED=" + text);
+        return;
+    }
+    // Do not transcribe the response played by the speaker.
+    paused_ = true;
+    queue_.clear();
+    queuedBytes_ = 0;
+    for (char& character : text) {
+        if (character == '\r' || character == '\n') character = ' ';
+    }
+    log_("VOICE_CHAT_TEXT=" + text);
 }
