@@ -1,0 +1,2143 @@
+{
+  "schema_version": 1,
+  "defaults": {
+    "part_separator": "，",
+    "unknown_value": "未知({hex})",
+    "unknown_attribute": "属性{id}={hex}",
+    "result": {
+      "success_value": 0,
+      "success_text": "成功",
+      "failure_template": "失败({hex})"
+    }
+  },
+  "value_maps": {
+    "boolean": {
+      "0": "关闭",
+      "1": "开启"
+    },
+    "yes_no": {
+      "0": "否",
+      "1": "是"
+    },
+    "prompt_tone": {
+      "0": "打开",
+      "1": "静音"
+    },
+    "constant_light": {
+      "0": "取消常亮",
+      "1": "常亮"
+    },
+    "normal_abnormal": {
+      "0": "正常",
+      "1": "异常"
+    },
+    "connected": {
+      "0": "已断开",
+      "1": "已连接"
+    },
+    "lens": {
+      "0": "关闭",
+      "1": "打开"
+    },
+    "function_mode": {
+      "0": "字幕",
+      "1": "场景",
+      "2": "会议",
+      "6": "空闲"
+    },
+    "meeting_scene": {
+      "0": "无",
+      "1": "最佳取景",
+      "2": "画廊",
+      "3": "发言人",
+      "4": "白板",
+      "5": "手势"
+    },
+    "resolution": {
+      "0": "720P",
+      "1": "1080P",
+      "2": "4K"
+    },
+    "frame_rate": {
+      "0": "24 fps",
+      "1": "25 fps",
+      "2": "30 fps",
+      "3": "50 fps",
+      "4": "60 fps"
+    },
+    "view_adjustment": {
+      "0": "放大",
+      "1": "缩小",
+      "2": "左移",
+      "3": "右移",
+      "4": "上移",
+      "5": "下移",
+      "6": "重置"
+    },
+    "gesture_mode": {
+      "1": "智能取景",
+      "2": "智能画廊",
+      "3": "发言人跟踪",
+      "4": "智能白板"
+    },
+    "key_name": {
+      "0": "播放",
+      "1": "音量+",
+      "2": "音量-",
+      "3": "接听",
+      "4": "静音",
+      "5": "闪录",
+      "6": "声纹",
+      "7": "蓝牙",
+      "8": "电源"
+    },
+    "key_action": {
+      "0": "松开",
+      "1": "按下",
+      "2": "单击"
+    },
+    "flash_status": {
+      "0": "停止",
+      "1": "开始",
+      "2": "异常"
+    },
+    "ota_status": {
+      "0": "升级成功",
+      "1": "升级中",
+      "2": "升级失败",
+      "3": "未升级"
+    },
+    "ota_reason": {
+      "0": "未知",
+      "1": "空间不足",
+      "2": "升级版本错误",
+      "3": "未检测到升级文件",
+      "4": "文件名错误",
+      "5": "镜像不存在",
+      "6": "文件解压失败",
+      "7": "启动配置失败",
+      "8": "条件不满足",
+      "9": "分区写入失败",
+      "10": "头部异常",
+      "11": "MD5 校验失败",
+      "12": "环境异常",
+      "13": "镜像格式错误"
+    },
+    "register_result": {
+      "0": "成功",
+      "1": "超时",
+      "2": "失败"
+    },
+    "language": {
+      "0": "英文",
+      "1": "中文"
+    },
+    "camera_reset": {
+      "0": "曝光",
+      "1": "亮度"
+    },
+    "system_power": {
+      "0": "关机",
+      "1": "硬重启",
+      "2": "软重启"
+    }
+  },
+  "commands": [
+    {
+      "id": "0x0007",
+      "name": "查询 MAC 地址",
+      "empty_meaning": {
+        "pc_to_connect": "查询 MAC 地址",
+        "connect_to_pc": "查询 MAC 地址"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {
+                "direction": "connect_to_pc"
+              },
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "bytes",
+                  "length": "remaining",
+                  "format": "mac"
+                }
+              ],
+              "emit": [
+                "MAC={value}"
+              ]
+            },
+            {
+              "when": {
+                "direction": "pc_to_connect"
+              },
+              "fields": [],
+              "emit": [
+                "查询 MAC 地址"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x000A",
+      "name": "按键上报",
+      "empty_meaning": {
+        "pc_to_connect": "按键状态上报",
+        "connect_to_pc": "按键状态上报"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {
+                "size": 1
+              },
+              "fields": [
+                {
+                  "name": "key",
+                  "source": "attribute_id",
+                  "type": "u8",
+                  "value_map": "key_name"
+                },
+                {
+                  "name": "action",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u8",
+                  "value_map": "key_action"
+                }
+              ],
+              "emit": [
+                "按键={key}，动作={action}"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x000B",
+      "name": "查询电池参数",
+      "empty_meaning": {
+        "pc_to_connect": "查询电池参数",
+        "connect_to_pc": "查询电池参数"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {
+                "direction": "pc_to_connect",
+                "size": 0
+              },
+              "fields": [],
+              "emit": ["查询电量"]
+            },
+            {
+              "when": {
+                "direction": "connect_to_pc",
+                "size": 1
+              },
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u8"
+                }
+              ],
+              "emit": ["battery(电量)={value}%"]
+            }
+          ]
+        },
+        {
+          "id": "0x01",
+          "cases": [
+            {
+              "when": {
+                "direction": "pc_to_connect",
+                "size": 0
+              },
+              "fields": [],
+              "emit": ["查询电压"]
+            },
+            {
+              "when": {
+                "direction": "connect_to_pc",
+                "size": 2
+              },
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u16_be"
+                }
+              ],
+              "emit": ["voltage(电压)={value} mV"]
+            }
+          ]
+        },
+        {
+          "id": "0x02",
+          "cases": [
+            {
+              "when": {
+                "direction": "pc_to_connect",
+                "size": 0
+              },
+              "fields": [],
+              "emit": ["查询电流"]
+            },
+            {
+              "when": {
+                "direction": "connect_to_pc",
+                "size": 2
+              },
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "i16_be"
+                }
+              ],
+              "emit": ["current(电流)={value} mA"]
+            }
+          ]
+        },
+        {
+          "id": "0x03",
+          "cases": [
+            {
+              "when": {
+                "direction": "pc_to_connect",
+                "size": 0
+              },
+              "fields": [],
+              "emit": ["查询温度"]
+            },
+            {
+              "when": {
+                "direction": "connect_to_pc",
+                "size": 2
+              },
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u16_be"
+                }
+              ],
+              "emit": ["temperature(温度原始值)={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x000C",
+      "name": "查询设备软件版本",
+      "empty_meaning": {
+        "pc_to_connect": "查询设备软件版本",
+        "connect_to_pc": "查询设备软件版本"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"direction": "connect_to_pc"},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "bytes",
+                  "length": "remaining",
+                  "format": "version"
+                }
+              ],
+              "emit": ["设备版本={value}"]
+            },
+            {
+              "when": {"direction": "pc_to_connect"},
+              "fields": [],
+              "emit": ["查询设备软件版本"]
+            }
+          ]
+        },
+        {
+          "id": "0x01",
+          "cases": [
+            {
+              "when": {"direction": "connect_to_pc"},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "bytes",
+                  "length": "remaining",
+                  "format": "version"
+                }
+              ],
+              "emit": ["蓝牙版本={value}"]
+            },
+            {
+              "when": {"direction": "pc_to_connect"},
+              "fields": [],
+              "emit": ["查询设备软件版本"]
+            }
+          ]
+        },
+        {
+          "id": "0x02",
+          "cases": [
+            {
+              "when": {"direction": "connect_to_pc"},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "bytes",
+                  "length": "remaining",
+                  "format": "version"
+                }
+              ],
+              "emit": ["唤醒芯片版本={value}"]
+            },
+            {
+              "when": {"direction": "pc_to_connect"},
+              "fields": [],
+              "emit": ["查询设备软件版本"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x000D",
+      "name": "设置音量",
+      "empty_meaning": {
+        "pc_to_connect": "设置音量",
+        "connect_to_pc": "设置音量"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u8"
+                }
+              ],
+              "emit": ["设置音量={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u8"
+                }
+              ],
+              "emit": ["音量={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x000E",
+      "name": "查询音量",
+      "empty_meaning": {
+        "pc_to_connect": "查询音量",
+        "connect_to_pc": "查询音量"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u8"
+                }
+              ],
+              "emit": ["PC 音量={value}"]
+            },
+            {
+              "when": {"direction": "pc_to_connect"},
+              "fields": [],
+              "emit": ["查询音量"]
+            }
+          ]
+        },
+        {
+          "id": "0x01",
+          "cases": [
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u8"
+                }
+              ],
+              "emit": ["蓝牙音量={value}"]
+            },
+            {
+              "when": {"direction": "pc_to_connect"},
+              "fields": [],
+              "emit": ["查询音量"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0012",
+      "name": "设置蓝牙名称",
+      "empty_meaning": {
+        "pc_to_connect": "设置蓝牙名称",
+        "connect_to_pc": "设置蓝牙名称"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect"},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "utf8",
+                  "length": "remaining"
+                }
+              ],
+              "emit": ["设置蓝牙名称={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc"},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "utf8",
+                  "length": "remaining"
+                }
+              ],
+              "emit": ["蓝牙名称={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0013",
+      "name": "查询蓝牙名称",
+      "empty_meaning": {
+        "pc_to_connect": "查询蓝牙名称",
+        "connect_to_pc": "查询蓝牙名称"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"direction": "connect_to_pc"},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "utf8",
+                  "length": "remaining"
+                }
+              ],
+              "emit": ["蓝牙名称={value}"]
+            },
+            {
+              "when": {"direction": "pc_to_connect"},
+              "fields": [],
+              "emit": ["查询蓝牙名称"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0019",
+      "name": "查询硬件版本",
+      "empty_meaning": {
+        "pc_to_connect": "查询硬件版本",
+        "connect_to_pc": "查询硬件版本"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "connect_to_pc"},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "utf8",
+                  "length": "remaining"
+                }
+              ],
+              "emit": ["硬件版本={value}"]
+            },
+            {
+              "when": {"direction": "pc_to_connect"},
+              "fields": [],
+              "emit": ["查询硬件版本"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x001B",
+      "name": "查询序列号",
+      "empty_meaning": {
+        "pc_to_connect": "查询序列号",
+        "connect_to_pc": "查询序列号"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "connect_to_pc"},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "utf8",
+                  "length": "remaining"
+                }
+              ],
+              "emit": ["序列号={value}"]
+            },
+            {
+              "when": {"direction": "pc_to_connect"},
+              "fields": [],
+              "emit": ["查询序列号"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x001E",
+      "name": "设置 UTC 时间",
+      "empty_meaning": {
+        "pc_to_connect": "设置 UTC 时间",
+        "connect_to_pc": "设置 UTC 时间"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 4},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u32_be"
+                }
+              ],
+              "emit": ["设置 UTC={value} 秒"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 4},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u32_be"
+                }
+              ],
+              "emit": ["UTC={value} 秒"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0021",
+      "name": "功能模式",
+      "empty_meaning": {
+        "pc_to_connect": "查询功能模式",
+        "connect_to_pc": "查询功能模式"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 0},
+              "fields": [],
+              "emit": ["查询功能模式"]
+            },
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u8",
+                  "value_map": "function_mode"
+                }
+              ],
+              "emit": ["设置功能模式={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u8",
+                  "value_map": "function_mode"
+                }
+              ],
+              "emit": ["功能模式={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0023",
+      "name": "会议场景",
+      "empty_meaning": {
+        "pc_to_connect": "查询会议场景",
+        "connect_to_pc": "查询会议场景"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 0},
+              "fields": [],
+              "emit": ["查询会议场景"]
+            },
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u8",
+                  "value_map": "meeting_scene"
+                }
+              ],
+              "emit": ["设置会议场景={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u8",
+                  "value_map": "meeting_scene"
+                }
+              ],
+              "emit": ["会议场景={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0024",
+      "name": "视角调节",
+      "empty_meaning": {
+        "pc_to_connect": "视角调节",
+        "connect_to_pc": "视角调节"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [
+                {
+                  "name": "value",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u8",
+                  "value_map": "view_adjustment"
+                }
+              ],
+              "emit": ["设置视角={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0027",
+      "name": "设置分辨率和帧率",
+      "empty_meaning": {
+        "pc_to_connect": "设置分辨率和帧率",
+        "connect_to_pc": "设置分辨率和帧率"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [
+                {
+                  "name": "resolution",
+                  "source": "attribute_id",
+                  "type": "u8",
+                  "value_map": "resolution"
+                },
+                {
+                  "name": "frame",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u8",
+                  "value_map": "frame_rate"
+                }
+              ],
+              "emit": [
+                "分辨率={resolution}",
+                "帧率={frame}"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0028",
+      "name": "查询分辨率和帧率",
+      "empty_meaning": {
+        "pc_to_connect": "查询分辨率和帧率",
+        "connect_to_pc": "查询分辨率和帧率"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [
+                {
+                  "name": "resolution",
+                  "source": "attribute_id",
+                  "type": "u8",
+                  "value_map": "resolution"
+                },
+                {
+                  "name": "frame",
+                  "source": "content",
+                  "offset": 0,
+                  "type": "u8",
+                  "value_map": "frame_rate"
+                }
+              ],
+              "emit": [
+                "分辨率={resolution}",
+                "帧率={frame}"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0029",
+      "name": "设置相机参数",
+      "empty_meaning": {
+        "pc_to_connect": "设置相机参数",
+        "connect_to_pc": "设置相机参数"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 1, "bytes": [{"offset": 0, "equals": 1}]},
+              "fields": [],
+              "emit": ["设置曝光=自动"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1, "bytes": [{"offset": 0, "equals": 1}]},
+              "fields": [],
+              "emit": ["曝光=自动"]
+            },
+            {
+              "when": {"direction": "pc_to_connect", "size": 2, "bytes": [{"offset": 0, "equals": 0}]},
+              "fields": [{"name": "value", "source": "content", "offset": 1, "type": "u8"}],
+              "emit": ["设置曝光=手动({value})"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 2, "bytes": [{"offset": 0, "equals": 0}]},
+              "fields": [{"name": "value", "source": "content", "offset": 1, "type": "u8"}],
+              "emit": ["曝光=手动({value})"]
+            }
+          ]
+        },
+        {
+          "id": "0x01",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 1, "bytes": [{"offset": 0, "equals": 1}]},
+              "fields": [],
+              "emit": ["设置白平衡=自动"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1, "bytes": [{"offset": 0, "equals": 1}]},
+              "fields": [],
+              "emit": ["白平衡=自动"]
+            },
+            {
+              "when": {"direction": "pc_to_connect", "size": 3, "bytes": [{"offset": 0, "equals": 0}]},
+              "fields": [{"name": "value", "source": "content", "offset": 1, "type": "u16_be"}],
+              "emit": ["设置白平衡=手动({value})"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 3, "bytes": [{"offset": 0, "equals": 0}]},
+              "fields": [{"name": "value", "source": "content", "offset": 1, "type": "u16_be"}],
+              "emit": ["白平衡=手动({value})"]
+            }
+          ]
+        },
+        {
+          "id": "0x02",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["设置对比度={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["对比度={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x03",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["设置饱和度={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["饱和度={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x04",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["设置锐度={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["锐度={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x05",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["设置 HDR={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["HDR={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x06",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["设置抗闪烁={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["抗闪烁={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x07",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["设置亮度={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["亮度={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x002A",
+      "name": "查询相机参数",
+      "empty_meaning": {
+        "pc_to_connect": "查询相机参数",
+        "connect_to_pc": "查询相机参数"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"size": 1, "bytes": [{"offset": 0, "equals": 1}]},
+              "fields": [],
+              "emit": ["曝光=自动"]
+            },
+            {
+              "when": {"size": 2, "bytes": [{"offset": 0, "equals": 0}]},
+              "fields": [{"name": "value", "source": "content", "offset": 1, "type": "u8"}],
+              "emit": ["曝光=手动({value})"]
+            }
+          ]
+        },
+        {
+          "id": "0x01",
+          "cases": [
+            {
+              "when": {"size": 1, "bytes": [{"offset": 0, "equals": 1}]},
+              "fields": [],
+              "emit": ["白平衡=自动"]
+            },
+            {
+              "when": {"size": 3, "bytes": [{"offset": 0, "equals": 0}]},
+              "fields": [{"name": "value", "source": "content", "offset": 1, "type": "u16_be"}],
+              "emit": ["白平衡=手动({value})"]
+            }
+          ]
+        },
+        {
+          "id": "0x02",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["对比度={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x03",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["饱和度={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x04",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["锐度={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x05",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["HDR={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x06",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["抗闪烁={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x07",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["亮度={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x002B",
+      "name": "设置画面参数",
+      "empty_meaning": {
+        "pc_to_connect": "设置画面参数",
+        "connect_to_pc": "设置画面参数"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["设置水平镜像={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["水平镜像={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x01",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["设置垂直镜像={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["垂直镜像={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x02",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["设置智能调节={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["智能调节={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x03",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["设置水平校正={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["水平校正={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x04",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["设置低分辨率模式={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["低分辨率模式={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x05",
+          "cases": [
+            {
+              "when": {"size": 0},
+              "fields": [],
+              "emit": ["复位画面设置"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x002C",
+      "name": "查询画面参数",
+      "empty_meaning": {
+        "pc_to_connect": "查询画面参数",
+        "connect_to_pc": "查询画面参数"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["水平镜像={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x01",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["垂直镜像={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x02",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["智能调节={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x03",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["水平校正={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x04",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["低分辨率模式={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x05",
+          "cases": [
+            {
+              "when": {"size": 0},
+              "fields": [],
+              "emit": ["复位画面设置"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x002D",
+      "name": "语音唤醒",
+      "empty_meaning": {
+        "pc_to_connect": "查询语音唤醒状态",
+        "connect_to_pc": "查询语音唤醒状态"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 0},
+              "fields": [],
+              "emit": ["查询语音唤醒状态"]
+            },
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["设置语音唤醒={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["语音唤醒={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x002F",
+      "name": "恢复出厂设置",
+      "empty_meaning": {
+        "pc_to_connect": "执行恢复出厂设置",
+        "connect_to_pc": "执行恢复出厂设置"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "fields": [],
+              "emit": ["执行恢复出厂设置"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0030",
+      "name": "查询存储空间",
+      "empty_meaning": {
+        "pc_to_connect": "查询存储空间",
+        "connect_to_pc": "查询存储空间"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"direction": "connect_to_pc", "size": 16},
+              "fields": [
+                {"name": "available", "source": "content", "offset": 0, "type": "u64_be"},
+                {"name": "total", "source": "content", "offset": 8, "type": "u64_be"}
+              ],
+              "emit": [
+                "可用空间={available} 字节",
+                "总空间={total} 字节"
+              ]
+            },
+            {
+              "when": {"direction": "pc_to_connect"},
+              "fields": [],
+              "emit": ["查询存储空间"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0031",
+      "name": "启动 OTA",
+      "empty_meaning": {
+        "pc_to_connect": "启动 OTA",
+        "connect_to_pc": "启动 OTA"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "fields": [],
+              "emit": ["启动 OTA"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0032",
+      "name": "OTA 状态上报",
+      "empty_meaning": {
+        "pc_to_connect": "OTA 状态上报",
+        "connect_to_pc": "OTA 状态上报"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"size": 3},
+              "fields": [
+                {"name": "progress", "source": "content", "offset": 0, "type": "u8"},
+                {"name": "status", "source": "content", "offset": 1, "type": "u8", "value_map": "ota_status"},
+                {"name": "reason", "source": "content", "offset": 2, "type": "u8", "value_map": "ota_reason"}
+              ],
+              "emit": [
+                "OTA 进度={progress}%",
+                "OTA 状态={status}",
+                "失败原因={reason}"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0034",
+      "name": "手势识别",
+      "empty_meaning": {
+        "pc_to_connect": "查询手势识别设置",
+        "connect_to_pc": "查询手势识别设置"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 0},
+              "fields": [],
+              "emit": ["查询手势识别设置"]
+            },
+            {
+              "when": {"direction": "pc_to_connect", "size": 2},
+              "fields": [
+                {"name": "mode", "source": "content", "offset": 0, "type": "u8", "value_map": "gesture_mode"},
+                {"name": "state", "source": "content", "offset": 1, "type": "u8", "value_map": "boolean"}
+              ],
+              "emit": ["设置{mode}={state}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 2},
+              "fields": [
+                {"name": "mode", "source": "content", "offset": 0, "type": "u8", "value_map": "gesture_mode"},
+                {"name": "state", "source": "content", "offset": 1, "type": "u8", "value_map": "boolean"}
+              ],
+              "emit": ["{mode}={state}"]
+            },
+            {
+              "when": {"size": 4},
+              "fields": [
+                {"name": "one", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"},
+                {"name": "two", "source": "content", "offset": 1, "type": "u8", "value_map": "boolean"},
+                {"name": "three", "source": "content", "offset": 2, "type": "u8", "value_map": "boolean"},
+                {"name": "four", "source": "content", "offset": 3, "type": "u8", "value_map": "boolean"}
+              ],
+              "emit": [
+                "智能取景={one}",
+                "智能画廊={two}",
+                "发言人跟踪={three}",
+                "智能白板={four}"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0035",
+      "name": "静音",
+      "empty_meaning": {
+        "pc_to_connect": "查询静音状态",
+        "connect_to_pc": "查询静音状态"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 0},
+              "fields": [],
+              "emit": ["查询静音状态"]
+            },
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["设置静音={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["静音={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0036",
+      "name": "触控板灯",
+      "empty_meaning": {
+        "pc_to_connect": "查询触控板灯状态",
+        "connect_to_pc": "查询触控板灯状态"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 0},
+              "fields": [],
+              "emit": ["查询触控板灯状态"]
+            },
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "constant_light"}],
+              "emit": ["设置触控板灯={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "constant_light"}],
+              "emit": ["触控板灯={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0038",
+      "name": "声纹注册",
+      "empty_meaning": {
+        "pc_to_connect": "声纹注册",
+        "connect_to_pc": "声纹注册"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"size": 0},
+              "fields": [],
+              "emit": ["停止声纹注册"]
+            }
+          ]
+        },
+        {
+          "id": "0x01",
+          "cases": [
+            {
+              "fields": [
+                {"name": "name", "source": "content", "offset": 0, "type": "utf8", "length": "remaining"}
+              ],
+              "emit": ["开始声纹注册，名称={name}"]
+            }
+          ]
+        },
+        {
+          "id": "0x03",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [
+                {"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "register_result"}
+              ],
+              "emit": ["声纹注册={value}"]
+            },
+            {
+              "when": {"min_size": 2},
+              "fields": [
+                {"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "register_result"},
+                {"name": "name", "source": "content", "offset": 1, "type": "utf8", "length": "remaining"}
+              ],
+              "emit": [
+                "声纹注册={value}",
+                "声纹名称={name}"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0039",
+      "name": "删除声纹",
+      "empty_meaning": {
+        "pc_to_connect": "删除声纹",
+        "connect_to_pc": "删除声纹"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"size": 0},
+              "fields": [],
+              "emit": ["删除全部声纹"]
+            }
+          ]
+        },
+        {
+          "id": "0x01",
+          "cases": [
+            {
+              "fields": [
+                {"name": "name", "source": "content", "offset": 0, "type": "utf8", "length": "remaining"}
+              ],
+              "emit": ["删除声纹={name}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x003A",
+      "name": "查询声纹列表",
+      "empty_meaning": {
+        "pc_to_connect": "查询声纹列表",
+        "connect_to_pc": "查询声纹列表"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["声纹数量={value}"]
+            },
+            {
+              "when": {"direction": "pc_to_connect"},
+              "fields": [],
+              "emit": ["查询声纹列表"]
+            }
+          ]
+        },
+        {
+          "id": "0x01",
+          "cases": [
+            {
+              "when": {"direction": "connect_to_pc"},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "utf8", "length": "remaining"}],
+              "emit": ["声纹名称={value}"]
+            },
+            {
+              "when": {"direction": "pc_to_connect"},
+              "fields": [],
+              "emit": ["查询声纹列表"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x003E",
+      "name": "查询镜头盖",
+      "empty_meaning": {
+        "pc_to_connect": "查询镜头盖状态",
+        "connect_to_pc": "查询镜头盖状态"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "connect_to_pc", "size": 0},
+              "fields": [{"name": "value", "source": "attribute_id", "type": "u8", "value_map": "lens"}],
+              "emit": ["镜头盖={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1, "bytes": [{"offset": 0, "equals": 0}]},
+              "fields": [{"name": "value", "source": "attribute_id", "type": "u8", "value_map": "lens"}],
+              "emit": ["镜头盖={value}"]
+            },
+            {
+              "when": {"direction": "pc_to_connect"},
+              "fields": [],
+              "emit": ["查询镜头盖状态"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x003F",
+      "name": "唤醒语言",
+      "empty_meaning": {
+        "pc_to_connect": "查询唤醒语言",
+        "connect_to_pc": "查询唤醒语言"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 0},
+              "fields": [],
+              "emit": ["查询唤醒语言"]
+            },
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "language"}],
+              "emit": ["设置唤醒语言={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "language"}],
+              "emit": ["唤醒语言={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0041",
+      "name": "电池状态上报",
+      "empty_meaning": {
+        "pc_to_connect": "电池状态上报",
+        "connect_to_pc": "电池状态上报"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "yes_no"}],
+              "emit": ["充电={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x01",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "yes_no"}],
+              "emit": ["低电量={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x02",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["电量={value}%"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0042",
+      "name": "提示音",
+      "empty_meaning": {
+        "pc_to_connect": "查询提示音状态",
+        "connect_to_pc": "查询提示音状态"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 0},
+              "fields": [],
+              "emit": ["查询提示音状态"]
+            },
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "prompt_tone"}],
+              "emit": ["设置提示音={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "prompt_tone"}],
+              "emit": ["提示音={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0043",
+      "name": "环形灯",
+      "empty_meaning": {
+        "pc_to_connect": "查询环形灯状态",
+        "connect_to_pc": "查询环形灯状态"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 0},
+              "fields": [],
+              "emit": ["查询环形灯状态"]
+            },
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "constant_light"}],
+              "emit": ["设置环形灯={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "constant_light"}],
+              "emit": ["环形灯={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0044",
+      "name": "握手",
+      "empty_meaning": {
+        "pc_to_connect": "发送握手",
+        "connect_to_pc": "发送握手"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "connected"}],
+              "emit": ["连接状态={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "normal_abnormal"}],
+              "emit": ["系统状态={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x01",
+          "cases": [
+            {
+              "when": {"min_size": 21},
+              "fields": [
+                {"name": "voice", "source": "content", "offset": 0, "type": "u8", "value_map": "normal_abnormal"},
+                {"name": "lens", "source": "content", "offset": 1, "type": "u8", "value_map": "lens"},
+                {"name": "volume", "source": "content", "offset": 2, "type": "u8"},
+                {"name": "battery", "source": "content", "offset": 3, "type": "u8"},
+                {"name": "charging", "source": "content", "offset": 4, "type": "u8", "value_map": "yes_no"},
+                {"name": "low", "source": "content", "offset": 5, "type": "u8", "value_map": "yes_no"},
+                {"name": "wakeup", "source": "content", "offset": 6, "type": "u8", "value_map": "boolean"},
+                {"name": "noise", "source": "content", "offset": 7, "type": "u8", "value_map": "boolean"},
+                {"name": "space", "source": "content", "offset": 8, "type": "u64_be"},
+                {"name": "version", "source": "content", "offset": 16, "type": "bytes", "length": 4, "format": "version"},
+                {"name": "serial", "source": "content", "offset": 21, "type": "utf8", "length": {"offset": 20, "type": "u8"}}
+              ],
+              "emit": [
+                "声纹状态={voice}",
+                "镜头盖={lens}",
+                "PC 音量={volume}",
+                "电量={battery}%",
+                "充电={charging}",
+                "低电量={low}",
+                "语音唤醒={wakeup}",
+                "声纹降噪={noise}",
+                "剩余空间={space} 字节",
+                "版本={version}",
+                "序列号={serial}"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0045",
+      "name": "声纹开关",
+      "empty_meaning": {
+        "pc_to_connect": "查询声纹降噪状态",
+        "connect_to_pc": "查询声纹降噪状态"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 0},
+              "fields": [],
+              "emit": ["查询声纹降噪状态"]
+            },
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["设置声纹降噪={value}"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "boolean"}],
+              "emit": ["声纹降噪={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0046",
+      "name": "定时关机",
+      "empty_meaning": {
+        "pc_to_connect": "查询定时关机",
+        "connect_to_pc": "查询定时关机"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 0},
+              "fields": [],
+              "emit": ["查询定时关机"]
+            },
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["设置定时关机={value} 分钟"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["定时关机={value} 分钟"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0047",
+      "name": "闪录状态",
+      "empty_meaning": {
+        "pc_to_connect": "查询闪录状态",
+        "connect_to_pc": "查询闪录状态"
+      },
+      "attributes": [
+        {
+          "id": "0x00",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "flash_status"}],
+              "emit": ["设置闪录状态={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x01",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 0},
+              "fields": [],
+              "emit": ["查询闪录状态"]
+            },
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "flash_status"}],
+              "emit": ["查询闪录状态={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x02",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "flash_status"}],
+              "emit": ["按键闪录状态={value}"]
+            }
+          ]
+        },
+        {
+          "id": "0x03",
+          "cases": [
+            {
+              "when": {"size": 4},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u32_be"}],
+              "emit": ["闪录开始时间戳={value} 秒"]
+            }
+          ]
+        },
+        {
+          "id": "0x04",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "function_mode"}],
+              "emit": ["闪录功能模式={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x004A",
+      "name": "心跳",
+      "empty_meaning": {
+        "pc_to_connect": "回复心跳",
+        "connect_to_pc": "收到心跳"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"size": 5},
+              "fields": [
+                {"name": "attribute", "source": "attribute_id", "type": "u8"},
+                {"name": "sequence", "source": "content", "offset": 0, "type": "u32_be"},
+                {"name": "interval", "source": "content", "offset": 4, "type": "u8"}
+              ],
+              "emit": ["心跳属性{attribute}={sequence}/{interval}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x004B",
+      "name": "相机参数复位",
+      "empty_meaning": {
+        "pc_to_connect": "复位相机参数",
+        "connect_to_pc": "复位相机参数"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"size": 0},
+              "fields": [{"name": "value", "source": "attribute_id", "type": "u8", "value_map": "camera_reset"}],
+              "emit": ["复位相机参数={value}"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x004C",
+      "name": "闪录时长",
+      "empty_meaning": {
+        "pc_to_connect": "查询闪录时长",
+        "connect_to_pc": "查询闪录时长"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 0},
+              "fields": [],
+              "emit": ["查询闪录时长"]
+            },
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["设置闪录时长={value} 小时"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["闪录时长={value} 小时"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x004D",
+      "name": "闪录静默退出时长",
+      "empty_meaning": {
+        "pc_to_connect": "查询闪录静默退出时长",
+        "connect_to_pc": "查询闪录静默退出时长"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"direction": "pc_to_connect", "size": 0},
+              "fields": [],
+              "emit": ["查询闪录静默退出时长"]
+            },
+            {
+              "when": {"direction": "pc_to_connect", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["设置闪录静默退出时长={value} 分钟"]
+            },
+            {
+              "when": {"direction": "connect_to_pc", "size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8"}],
+              "emit": ["闪录静默退出时长={value} 分钟"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0x0050",
+      "name": "系统电源",
+      "empty_meaning": {
+        "pc_to_connect": "系统电源操作",
+        "connect_to_pc": "系统电源操作"
+      },
+      "attributes": [
+        {
+          "id": "*",
+          "cases": [
+            {
+              "when": {"size": 1},
+              "fields": [{"name": "value", "source": "content", "offset": 0, "type": "u8", "value_map": "system_power"}],
+              "emit": ["系统电源操作={value}"]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
