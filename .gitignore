@@ -3,3 +3,4 @@ recordings/
 *.wav
 .vs/
 CMakeUserPresets.json
+/scripts/deepseek.local.toml

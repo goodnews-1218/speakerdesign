@@ -282,9 +282,10 @@
     ++cameraVersion; clearTimeout(cameraTimeout); cameraStream?.getTracks().forEach((track) => track.stop()); cameraStream = null;
     const video = $('camera-video'), image = $('camera-image'); video.onloadedmetadata = null; video.onerror = null; image.onload = null; image.onerror = null;
     video.pause(); video.srcObject = null; video.removeAttribute('src'); video.load(); video.hidden = true; video.controls = false;
+    video.defaultMuted = true; video.muted = true;
     image.removeAttribute('src'); image.hidden = true;
     if (videoObjectUrl) URL.revokeObjectURL(videoObjectUrl); videoObjectUrl = ''; cameraKind = '';
-    $('camera-placeholder').hidden = false; $('video-stage').classList.remove('has-feed');
+    $('camera-placeholder').hidden = false; $('video-stage').classList.remove('has-feed', 'has-playback');
     $('camera-state').textContent = '未开启'; $('camera-state').className = 'badge neutral'; $('camera-source-label').textContent = '尚未接入画面';
     $('video-dimensions').textContent = '等待视频源'; $('snapshot-button').disabled = true; $('feed-label').textContent = 'CAMERA PREVIEW'; setCameraLoading(false);
   }
@@ -334,7 +335,10 @@
     setCameraLoading(true); $('camera-state').textContent = '正在连接';
     const isVideo = localFile || /\.(mp4|webm|ogg|mov)(\?|$)/i.test(url);
     if (isVideo) {
-      const video = $('camera-video'); video.hidden = false; video.controls = Boolean(localFile); video.loop = Boolean(localFile); video.muted = true;
+      const video = $('camera-video');
+      video.hidden = false; video.controls = true; video.loop = Boolean(localFile);
+      video.defaultMuted = !localFile; video.muted = !localFile;
+      $('video-stage').classList.add('has-playback');
       video.onloadedmetadata = () => { if (ticket !== cameraVersion) return; cameraReady(localFile ? 'file' : 'service-video', localFile ? localFile.name : '音箱视频服务', video.videoWidth, video.videoHeight); video.play().catch(() => { video.controls = true; toast('点击画面中的播放按钮开始预览。'); }); };
       video.onerror = () => cameraFailure('视频无法播放，请确认地址可用且编码受浏览器支持。', ticket); video.src = url;
     } else {

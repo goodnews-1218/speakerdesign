@@ -29,6 +29,10 @@ public:
         if(!out_) throw std::runtime_error("WAV write failed");
         bytes_+=static_cast<uint32_t>(count);
     }
+    void flush() {
+        out_.flush();
+        if(!out_) throw std::runtime_error("WAV flush failed");
+    }
     void finish() {
         if(!out_.is_open()) return;
         header(); out_.flush();
