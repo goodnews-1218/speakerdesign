@@ -34,9 +34,41 @@
     cancelled: ['分析已停止', 'pending'],
     pending: ['等待分析', 'pending'],
   };
+  const captureLabels = {
+    ready: ['抽帧已保存', 'success'],
+    insufficient: ['有效画面不足', 'warning'],
+    failed: ['抽帧失败', 'error'],
+    unknown: ['抽帧状态未记录', ''],
+  };
+  const analysisLabels = {
+    queued: ['排队中，尚未提交', 'warning'],
+    requesting: ['请求中，等待 DeepSeek 返回', 'warning'],
+    received: ['已收到 DeepSeek 响应', 'success'],
+    failed: ['分析请求失败', 'error'],
+    skipped: ['未提交本批画面', ''],
+    unknown: ['提交状态未记录', ''],
+  };
+  const alarmLabels = {
+    pending: ['等待分析结果', 'warning'],
+    playing: ['正在通过 Windows 播放', 'warning'],
+    played: ['Windows 已完成播放', 'success'],
+    failed: ['Windows 音频播放失败', 'error'],
+    skipped: ['未触发警报声', ''],
+    unknown: ['播放状态未记录', ''],
+  };
+  const alarmSkipLabels = {
+    stopped: '监测已停止，未播放',
+    no_fall: '分析结果未达到响铃条件',
+    uncertain: '画面无法确认，未播放',
+    demo: '模拟心率，未自动播放',
+    already_alerted: '同一次预警已播放',
+    insufficient_frames: '有效画面不足，未播放',
+    analysis_failed: '分析失败，未播放',
+  };
 
   let status = null;
   let actionPending = false;
+  let testingAlarm = false;
   let connectionError = '';
   let actionError = '';
   let pollTimer;
@@ -80,8 +112,9 @@
 
   function updateControls() {
     const state = status?.state;
-    $('ring-start').disabled = actionPending || isActive(state) || !status || !!connectionError;
+    $('ring-start').disabled = actionPending || testingAlarm || isActive(state) || !status || !!connectionError;
     $('ring-stop').disabled = actionPending || !['starting', 'running'].includes(state);
+    $('ring-test-alarm').disabled = actionPending || testingAlarm || isActive(state) || !status || !!connectionError;
     baselineInput.disabled = actionPending || isActive(state);
     demo.disabled = baselineInput.disabled;
     const message = actionError || connectionError || status?.error || '';
@@ -89,6 +122,91 @@
     if (messageNode.textContent !== message) messageNode.textContent = message;
     messageNode.dataset.level = message ? 'error' : '';
     messageNode.hidden = !message;
+  }
+
+  function setDiagnostic(id, [label, tone = '']) {
+    const node = $(id);
+    if (node.textContent !== label) node.textContent = label;
+    node.dataset.tone = tone;
+  }
+
+  function episodeNumber(item) {
+    return Number(/^(?:event-)?(\d+)(?:-\d+)?$/.exec(String(item.id))?.[1]) || 0;
+  }
+
+  function eventStages(item) {
+    const capture = captureLabels[item.capture_state] || captureLabels.unknown;
+    const analysis = analysisLabels[item.analysis_state] || analysisLabels.unknown;
+    let alarm = alarmLabels[item.alarm_state] || alarmLabels.unknown;
+    if (item.alarm_played) alarm = alarmLabels.played;
+    if (alarm === alarmLabels.skipped && Object.hasOwn(alarmSkipLabels, item.alarm_reason)) {
+      alarm = [alarmSkipLabels[item.alarm_reason]];
+    }
+    return { capture, analysis, alarm };
+  }
+
+  function renderDiagnostic(data) {
+    const events = Array.isArray(data?.events) ? data.events : [];
+    const latest = events[0];
+    const triggerCount = data?.warning_count || 0;
+    const episode = latest ? episodeNumber(latest) : 0;
+    const waitingForFrames = triggerCount > 0 && (!latest || (episode > 0 && triggerCount > episode));
+    const collecting = ['starting', 'running'].includes(data?.state);
+    let trigger = ['尚未启动心率监测'];
+    let capture = ['等待心率预警'];
+    let analysis = ['未提交'];
+    let alarm = ['未触发'];
+    let detail = '';
+    let detailTone = '';
+    if (!data) {
+      trigger = ['无法读取本机监测状态', 'error'];
+      capture = analysis = alarm = ['状态暂不可用'];
+    } else if (waitingForFrames) {
+      trigger = ['已确认心率预警', 'warning'];
+      capture = data.capture_error ? ['抽帧出错', 'error']
+        : isActive(data.state) ? ['正在准备预警画面', 'warning'] : ['暂无已保存画面', 'warning'];
+      if (collecting && !data.capture_error) alarm = ['等待抽帧和分析', 'warning'];
+      detail = data.capture_error || '';
+    } else if (latest) {
+      const current = episode ? events.filter(item => episodeNumber(item) === episode) : [latest];
+      const evaluated = current.find(item => item.alarm_reason !== 'already_alerted' && item.verdict !== 'already_alerted') || latest;
+      const played = current.some(item => item.alarm_played || item.alarm_state === 'played'
+        || item.alarm_reason === 'already_alerted' || item.verdict === 'already_alerted');
+      trigger = [episode ? `第 ${episode} 次心率预警` : '已确认心率预警', 'warning'];
+      capture = eventStages(latest).capture;
+      analysis = eventStages(evaluated).analysis;
+      alarm = played ? alarmLabels.played : eventStages(latest).alarm;
+      if (evaluated.verdict !== 'pending') {
+        const [verdict, tone] = verdicts[evaluated.verdict] || [];
+        detail = [verdict, evaluated.summary].filter(Boolean).join(' · ');
+        detailTone = tone === 'danger' ? 'error' : '';
+      }
+    } else if (data.state === 'starting') {
+      trigger = ['监测正在启动'];
+    } else if (data.state === 'running') {
+      const live = data.pulse_state === 'TRACKING' || (!data.pulse_state && data.bpm > 0);
+      trigger = !live ? ['等待稳定的戒指心率']
+        : ['auto', 'CALIBRATING'].includes(data.baseline) ? ['正在校准基线，尚未确认预警']
+          : ['监测中，尚未确认预警'];
+    } else if (['stopping', 'stopped', 'error'].includes(data.state)) {
+      trigger = ['本轮未确认心率预警'];
+    }
+    if (data?.demo) {
+      analysis = ['模拟心率，画面保存在本机'];
+      alarm = ['模拟心率，未自动播放'];
+    }
+    if (connectionError && data) trigger = ['连接中断，显示最后一次状态', 'error'];
+    setDiagnostic('ring-trigger-state', trigger);
+    setDiagnostic('ring-capture-state', capture);
+    setDiagnostic('ring-analysis-state', analysis);
+    setDiagnostic('ring-alarm-state', alarm);
+    setDiagnostic('ring-diagnostic-detail', [detail, detailTone]);
+    $('ring-diagnostic-detail').hidden = !detail;
+    $('ring-view-events').hidden = !events.length;
+    $('ring-diagnostic-review').hidden = !detail && !events.length;
+    setDiagnostic('ring-audio-output', [isActive(data?.state)
+      ? '警报使用 Windows 默认声音输出。停止监测后可试听。'
+      : '警报使用 Windows 默认声音输出。实际能否听到，可点「试听警报」确认。']);
   }
 
   function formatBaseline(value) {
@@ -151,10 +269,13 @@
       time.dateTime = timestamp.toISOString();
       body.append(time);
     }
-    body.append(
-      element('p', 'ring-event-summary', item.summary || '正在等待画面分析结果。'),
-      element('p', 'ring-event-meta', item.alarm_played ? '已播放警报声' : '未播放警报声'),
-    );
+    if (item.summary) body.append(element('p', 'ring-event-summary', item.summary));
+    const { capture, analysis, alarm } = eventStages(item);
+    const stages = element('dl', 'ring-event-stages');
+    for (const [label, value] of [['抽帧', capture], ['DeepSeek', analysis], ['警报声', alarm]]) {
+      stages.append(element('dt', '', label), element('dd', '', value[0]));
+    }
+    body.append(stages);
     const frames = element('div', 'ring-frames');
     for (const frame of item.frames || []) {
       const source = mediaUrl(frame.url);
@@ -282,6 +403,7 @@
     $('ring-baseline-value').textContent = data.baseline == null && isActive(data.state) && hasReading
       ? '标定中' : formatBaseline(data.baseline);
     $('ring-warning-count').textContent = String(data.warning_count ?? 0);
+    renderDiagnostic(data);
     renderPreview(data);
     renderEvents(data);
     renderVideos(data);
@@ -299,6 +421,7 @@
       const response = await fetch('/api/ring/' + endpoint, options);
       const data = await response.json().catch(() => null);
       if (!response.ok) throw new Error(data?.error || data?.message || '戒指服务请求失败。');
+      if (endpoint === 'test-alarm') return data;
       if (!data || !Object.hasOwn(stateLabels, data.state)) throw new Error('无法读取戒指服务状态。');
       return data;
     } finally {
@@ -332,6 +455,7 @@
       if (pollController !== controller) return;
       connectionError = '无法连接戒指服务。请用 start.cmd 启动本地页面，服务恢复后会自动刷新。';
       renderState('error', '连接异常');
+      renderDiagnostic(status);
       updateControls();
     } finally {
       if (pollController === controller) {
@@ -346,6 +470,7 @@
     cancelPoll();
     actionPending = true;
     actionError = '';
+    $('ring-test-alarm-result').hidden = true;
     updateControls();
     try {
       const data = await request('POST', endpoint, new AbortController(), payload);
@@ -357,6 +482,26 @@
       actionPending = false;
       updateControls();
       schedulePoll(0);
+    }
+  }
+
+  async function testAlarm() {
+    if ($('ring-test-alarm').disabled) return;
+    testingAlarm = true;
+    const result = $('ring-test-alarm-result');
+    result.hidden = false;
+    setDiagnostic('ring-test-alarm-result', ['正在试听警报声…', 'warning']);
+    updateControls();
+    try {
+      const data = await request('POST', 'test-alarm', new AbortController(), {});
+      if (data?.played !== true) throw new Error('本机服务没有确认试听结果。');
+      setDiagnostic('ring-test-alarm-result', ['Windows 已完成试听。请确认声音是否从音箱发出。', 'success']);
+    } catch (error) {
+      const message = error.name === 'AbortError' ? '试听响应超时，未确认播放结果。' : error.message;
+      setDiagnostic('ring-test-alarm-result', [message, 'error']);
+    } finally {
+      testingAlarm = false;
+      updateControls();
     }
   }
 
@@ -384,10 +529,16 @@
   baselineInput.addEventListener('input', () => baselineInput.setCustomValidity(''));
   demo.addEventListener('change', () => {
     $('ring-start-help').textContent = demo.checked
-      ? '使用模拟心率和真实摄像头画面，抽帧保存在本机。'
-      : '连接戒指并启动 BioScope 数据流。预警时会把抽帧发给 DeepSeek。';
+      ? '模拟心率只在本机保存抽帧，不提交 DeepSeek，也不自动发出警报声。'
+      : '启动 BioScope 并连接戒指。确认心率预警后会抽帧分析，画面支持疑似跌倒时才会响铃。';
   });
   $('ring-stop').addEventListener('click', () => performAction('stop', {}));
+  $('ring-test-alarm').addEventListener('click', testAlarm);
+  $('ring-view-events').addEventListener('click', () => {
+    const heading = $('ring-events-title');
+    heading.focus({ preventScroll: true });
+    heading.scrollIntoView({ block: 'start' });
+  });
 
   const ringTabs = [$('ring-nav'), $('mobile-ring-nav')];
   const voiceTabs = [$('workspace-nav'), $('mobile-workspace-nav')];

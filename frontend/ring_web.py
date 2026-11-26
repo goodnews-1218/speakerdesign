@@ -1,5 +1,6 @@
 """Expose one Connect ring recording session to the local dashboard."""
 
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
@@ -9,7 +10,7 @@ from time import time
 
 from deepseek import APIError
 from fall_vision import MAX_FRAMES
-from ring_alert import load_event, run_recorder
+from ring_alert import load_event, play_alarm, run_recorder
 
 
 ACTIVE_STATES = {"starting", "running", "stopping"}
@@ -20,6 +21,8 @@ FRAME_NAME = re.compile(r"fall-alerts/(event-[0-9]+-[0-9]+)/frame-([0-9]{3})\.jp
 PREVIEW = "fall-alerts/preview.jpg"
 EVENT_VERDICTS = {"suspected_fall", "no_visible_fall", "uncertain", "error", "demo",
                   "already_alerted", "cancelled"}
+ANALYSIS_STATES = {"queued", "requesting", "received", "failed", "skipped", "unknown"}
+ALARM_STATES = {"pending", "playing", "played", "failed", "skipped", "unknown"}
 PULSE_LINES = {
     "RING_BPM", "RING_DEMO_BPM", "RING_RECOVERED_BPM", "RING_HELD_BPM", "RING_LAST_BPM",
 }
@@ -74,6 +77,33 @@ def read_json_file(path, limit=16384):
         return None
 
 
+def event_states(result, capture, verdict, active):
+    analysis = result.get("analysis_state")
+    if not isinstance(analysis, str) or analysis not in ANALYSIS_STATES:
+        if verdict in ("suspected_fall", "no_visible_fall"):
+            analysis = "received"
+        elif verdict in ("demo", "already_alerted") or capture in ("failed", "insufficient"):
+            analysis = "skipped"
+        else:
+            analysis = "queued" if verdict == "pending" else "unknown"
+    if not active and analysis == "requesting":
+        analysis = "unknown"
+
+    alarm = result.get("alarm_state")
+    if not isinstance(alarm, str) or alarm not in ALARM_STATES:
+        if result.get("alarm_played") is True:
+            alarm = "played"
+        elif result.get("alarm_error"):
+            alarm = "failed"
+        elif verdict in ("no_visible_fall", "uncertain", "demo", "already_alerted", "error"):
+            alarm = "skipped"
+        else:
+            alarm = "pending" if verdict == "pending" else "unknown"
+    if not active and alarm in ("pending", "playing"):
+        alarm = "unknown"
+    return analysis, alarm
+
+
 def list_events(session, active):
     directories = []
     alerts = session / "fall-alerts"
@@ -97,6 +127,7 @@ def list_events(session, active):
             continue
         try:
             job = load_event(marker)
+            created_at = datetime.fromtimestamp(marker.stat().st_mtime, tz=timezone.utc).isoformat()
         except (OSError, ValueError):
             continue
         demo = demo or job["demo"]
@@ -104,24 +135,30 @@ def list_events(session, active):
         result = read_json_file(result_path) if result_path else {}
         if result is None:
             result = {"verdict": "error", "summary": "分析结果暂时无法读取。"}
+        capture = job["status"]
         summary = result.get("summary", "")
         verdict = result.get("verdict")
         if not isinstance(verdict, str) or verdict not in EVENT_VERDICTS:
             verdict = "pending" if active else "cancelled"
             if not active:
                 summary = "监测已结束，此批画面未完成分析。"
+        analysis, alarm = event_states(result, capture, verdict, active)
+        if capture == "failed" and not summary:
+            summary = "摄像头抽帧失败，无法分析。"
+        elif capture == "insufficient" and not summary:
+            summary = "可用画面不足，无法分析。"
         summary = summary[:300] if isinstance(summary, str) else ""
-        if result.get("alarm_error"):
-            summary += " Windows 音频警报播放失败。"
         frames = []
         times = job.get("times_ms")
         for index, timestamp in enumerate(times[:MAX_FRAMES] if isinstance(times, list) else []):
             frame = f"{relative}/frame-{index:03}.jpg"
             if type(timestamp) is int and regular_file(session, frame):
                 frames.append({"url": media_url(session, frame), "time_ms": timestamp})
-        events.append({"id": event_id, "verdict": verdict,
-                       "summary": summary,
-                       "alarm_played": result.get("alarm_played") is True, "frames": frames})
+        alarm_reason = result.get("alarm_reason")
+        events.append({"id": event_id, "verdict": verdict, "summary": summary, "created_at": created_at,
+                       "capture_state": capture, "analysis_state": analysis, "alarm_state": alarm,
+                       "alarm_reason": alarm_reason if isinstance(alarm_reason, str) else None,
+                       "alarm_played": alarm == "played", "frames": frames})
     return events, len(episodes), demo
 
 
@@ -161,23 +198,38 @@ class RingMonitorSession:
         self.warning_count = 0
         self.demo = False
         self.error = None
+        self.capture_error = None
+        self.result_save_errors = set()
 
     def latest_recording(self):
-        candidates = (path for path in self.recordings.glob("session-*")
-                      if SESSION_NAME.fullmatch(path.name) and regular_file(path, "video.mp4"))
-        return max((path for path in candidates if (path / "fall-alerts").is_dir()
-                    and not (path / "fall-alerts").is_symlink()),
-                   key=lambda path: int(path.name.split("-")[1]), default=None)
+        candidates = sorted((path for path in self.recordings.glob("session-*")
+                             if SESSION_NAME.fullmatch(path.name)),
+                            key=lambda path: int(path.name.split("-")[1]), reverse=True)
+        for path in candidates:
+            alerts = path / "fall-alerts"
+            if not alerts.is_dir() or alerts.is_symlink() or path.is_symlink():
+                continue
+            if (any(regular_file(path, f"fall-alerts/{marker.parent.name}/ready")
+                    for marker in alerts.glob("event-*/ready") if EVENT_NAME.fullmatch(marker.parent.name))
+                    or list_videos(path)):
+                return path
+        return None
 
     def status(self):
         with self.lock:
             session = self.session
+            save_errors = self.result_save_errors.copy()
             reply = {"state": self.state, "bpm": self.bpm, "baseline": self.baseline,
                      "pulse_state": self.pulse_state, "warning_count": self.warning_count,
-                     "demo": self.demo, "error": self.error, "session": session.name if session else None,
+                     "demo": self.demo, "error": self.error, "capture_error": self.capture_error,
+                     "session": session.name if session else None,
                      "preview_url": None, "events": [], "videos": []}
         if session:
             reply["events"], saved_warnings, saved_demo = list_events(session, reply["state"] in ACTIVE_STATES)
+            saved_results = {item["id"] for item in reply["events"]
+                             if item["verdict"] not in ("pending", "cancelled") and item["alarm_state"] != "playing"}
+            if not reply["error"] and save_errors - saved_results:
+                reply["error"] = "部分预警结果未能写入录像目录。请查看启动窗口中的 RING_ALERT_RESULT。"
             reply["warning_count"] = max(reply["warning_count"], saved_warnings)
             reply["demo"] = reply["demo"] or saved_demo
             reply["videos"] = list_videos(session)
@@ -215,6 +267,8 @@ class RingMonitorSession:
                 self.session = None
                 self.state, self.demo = "starting", demo
                 self.bpm, self.warning_count, self.error = None, 0, None
+                self.capture_error = None
+                self.result_save_errors.clear()
                 self.baseline = display_baseline(baseline.replace(":", ".."))
                 self.pulse_state = None
                 self.thread = Thread(target=self.run, args=(baseline, demo, self.cancel), daemon=True)
@@ -271,6 +325,11 @@ class RingMonitorSession:
                 self.baseline = display_baseline(value)
             elif key == "RING_HIGHLIGHT_TRIGGERED":
                 self.warning_count += 1
+                self.capture_error = None
+            elif key == "FALL_ALERT_ERROR" and self.warning_count:
+                self.capture_error = "摄像头取帧或保存失败，请检查镜头和本机录像目录。"
+            elif key == "RING_ALERT_RESULT_SAVE_FAILED" and EVENT_NAME.fullmatch(value):
+                self.result_save_errors.add(value)
             elif key == "RING_ERROR":
                 self.pulse_state, self.bpm = "UNAVAILABLE", None
                 self.error = "戒指数据读取失败，请检查 BioScope 是否正在采集。"
@@ -287,6 +346,18 @@ class RingMonitorSession:
                 self.state = "stopping"
                 self.cancel.set()
         return self.status()
+
+    def test_alarm(self):
+        if not self.device_lock.acquire(blocking=False):
+            raise APIError("请先停止监测或结束音箱录音，再试听警报。", 409)
+        try:
+            self.stop_playback()
+            play_alarm()
+        except (OSError, RuntimeError) as error:
+            raise APIError("Windows 播放警报声失败，请检查默认声音输出。", 503) from error
+        finally:
+            self.device_lock.release()
+        return {"played": True}
 
     def close(self):
         with self.lock:

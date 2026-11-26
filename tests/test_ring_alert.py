@@ -90,7 +90,9 @@ class RingAlertTests(unittest.TestCase):
 
         (directory / "ready.tmp").replace(directory / "ready")
         self.consume()
-        self.assertTrue(self.result(directory)["alarm_played"])
+        result = self.result(directory)
+        self.assertTrue(result["alarm_played"])
+        self.assertEqual((result["analysis_state"], result["alarm_state"]), ("received", "played"))
         self.client.complete.assert_called_once()
         request = self.client.complete.call_args.args[0][1]["content"]
         self.assertEqual([item["type"] for item in request], ["text", "image_url"] * 3)
@@ -123,6 +125,8 @@ class RingAlertTests(unittest.TestCase):
         self.assertEqual(self.result(demo)["verdict"], "demo")
         self.assertEqual(self.result(incomplete)["verdict"], "uncertain")
         self.assertEqual(self.result(duplicates)["verdict"], "uncertain")
+        self.assertTrue(all(self.result(event)["analysis_state"] == "skipped"
+                            for event in (demo, incomplete, duplicates)))
         self.client.complete.assert_not_called()
         self.sound.PlaySound.assert_not_called()
 
@@ -133,6 +137,8 @@ class RingAlertTests(unittest.TestCase):
         self.consume()
         self.assertEqual(self.result(invalid)["verdict"], "error")
         self.assertEqual(self.result(upstream)["verdict"], "error")
+        self.assertEqual(self.result(invalid)["analysis_state"], "skipped")
+        self.assertEqual(self.result(upstream)["analysis_state"], "failed")
         self.client.complete.assert_called_once()
         self.sound.PlaySound.assert_not_called()
 
@@ -175,6 +181,65 @@ class RingAlertTests(unittest.TestCase):
         with patch.object(ring_alert, "winsound", self.sound):
             result = ring_alert.analyze_event(directory / "ready", self.client, set(), cancel)
         self.assertFalse(result["alarm_played"])
+        self.assertEqual((result["analysis_state"], result["alarm_state"], result["alarm_reason"]),
+                         ("received", "skipped", "stopped"))
+        self.sound.PlaySound.assert_not_called()
+
+    def test_progress_distinguishes_model_response_from_audio_failure(self):
+        directory = self.make_event(1)
+
+        def complete(*_, **__):
+            result = self.result(directory)
+            self.assertEqual((result["analysis_state"], result["alarm_state"]), ("requesting", "pending"))
+            return json.dumps(suspected_fall_response())
+
+        def play(*_):
+            result = self.result(directory)
+            self.assertEqual((result["analysis_state"], result["alarm_state"]), ("received", "playing"))
+            raise RuntimeError("模拟 Windows 音频错误。")
+
+        self.client.complete.side_effect = complete
+        self.sound.PlaySound.side_effect = play
+        self.consume()
+        result = self.result(directory)
+        self.assertEqual((result["analysis_state"], result["alarm_state"]), ("received", "failed"))
+        self.assertEqual(result["verdict"], "suspected_fall")
+        self.assertIn("音频错误", result["alarm_error"])
+
+    def test_web_stop_drains_batch_published_by_finalizing_recorder(self):
+        pending = self.make_event(1, publish=False)
+        output = self.root.resolve()
+        alerts = output / "session-42" / "fall-alerts"
+        alerts.mkdir(parents=True)
+        directory = pending.replace(alerts / "event-1-1")
+        stop = Event()
+
+        def launch(command, **_):
+            stop_file = Path(command[command.index("--stop-file") + 1])
+            recorder = Mock(returncode=None, stdout=io.BytesIO(f"FALL_ALERT_ROOT={alerts}\n".encode("utf-8")))
+            recorder.__enter__ = Mock(return_value=recorder)
+            recorder.__exit__ = Mock(return_value=False)
+
+            def poll():
+                if recorder.returncode is None and stop_file.is_file():
+                    (directory / "ready.tmp").replace(directory / "ready")
+                    recorder.returncode = 0
+                return recorder.returncode
+
+            recorder.poll.side_effect = poll
+            recorder.wait.side_effect = lambda **_: recorder.returncode
+            return recorder
+
+        with patch.object(ring_alert.subprocess, "Popen", side_effect=launch), \
+                patch.object(ring_alert, "winsound", self.sound), redirect_stdout(io.StringIO()):
+            status = ring_alert.run_recorder(Path("connect_lab"), output, [], self.client,
+                                             cancel=stop, on_root=lambda _: stop.set())
+        self.assertEqual(status, 0)
+        result = self.result(directory)
+        self.assertEqual(result["verdict"], "suspected_fall")
+        self.assertEqual((result["analysis_state"], result["alarm_state"], result["alarm_reason"]),
+                         ("received", "skipped", "stopped"))
+        self.client.complete.assert_called_once()
         self.sound.PlaySound.assert_not_called()
 
 

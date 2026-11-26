@@ -112,6 +112,30 @@
           <span class="ring-badge" id="ring-state" role="status">尚未启动</span>
         </header>
 
+        <section class="panel ring-diagnostic" aria-labelledby="ring-diagnostic-title">
+          <header class="panel-header">
+            <div class="panel-title">
+              <svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg>
+              <h2 id="ring-diagnostic-title">预警进度</h2>
+            </div>
+            <button id="ring-test-alarm" type="button" class="outline-button" aria-describedby="ring-audio-output" disabled>
+              <svg class="icon" aria-hidden="true"><use href="#i-volume"/></svg>试听警报
+            </button>
+          </header>
+          <p class="ring-diagnostic-trigger" id="ring-trigger-state" role="status">正在连接本机服务</p>
+          <dl class="ring-diagnostic-steps" aria-live="polite" aria-atomic="true">
+            <div><dt>抽帧</dt><dd id="ring-capture-state">等待心率预警</dd></div>
+            <div><dt>DeepSeek</dt><dd id="ring-analysis-state">未提交</dd></div>
+            <div><dt>警报声</dt><dd id="ring-alarm-state">未触发</dd></div>
+          </dl>
+          <div class="ring-diagnostic-review" id="ring-diagnostic-review" hidden>
+            <p class="ring-help ring-diagnostic-detail" id="ring-diagnostic-detail" role="status" hidden></p>
+            <button id="ring-view-events" type="button" class="text-button" aria-controls="ring-events" hidden>查看预警记录</button>
+          </div>
+          <p class="ring-help ring-diagnostic-note" id="ring-audio-output">警报使用 Windows 默认声音输出。实际能否听到，可点「试听警报」确认。</p>
+          <p class="ring-help ring-diagnostic-note" id="ring-test-alarm-result" role="status" hidden></p>
+        </section>
+
         <div class="ring-layout">
           <section class="panel ring-preview-panel" aria-labelledby="ring-preview-title">
             <header class="panel-header">
@@ -155,7 +179,7 @@
                 <label class="ring-check"><input id="ring-demo-input" type="checkbox">模拟心率</label>
               </div>
               <p id="ring-baseline-help" class="ring-help">使用 auto 自动校准，也可输入个人基线，如 75 或 65:85。</p>
-              <p class="ring-help" id="ring-start-help">连接戒指并启动 BioScope 数据流。预警时会把抽帧发给 DeepSeek。</p>
+              <p class="ring-help" id="ring-start-help">启动 BioScope 并连接戒指。确认心率预警后会抽帧分析，画面支持疑似跌倒时才会响铃。</p>
               <div class="ring-actions">
                 <button id="ring-start" type="submit" class="primary-button" disabled>开始监测</button>
                 <button id="ring-stop" type="button" class="outline-button" disabled>停止监测</button>
@@ -170,7 +194,7 @@
             <header class="panel-header">
               <div class="panel-title">
                 <svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg>
-                <h2 id="ring-events-title">预警记录</h2>
+                <h2 id="ring-events-title" tabindex="-1">预警记录</h2>
               </div>
               <span id="ring-event-count" class="ring-muted"></span>
             </header>

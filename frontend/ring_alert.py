@@ -13,6 +13,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from threading import Event, Thread
+from time import sleep
 import wave
 
 from deepseek import APIError, DeepSeek
@@ -84,47 +85,105 @@ def load_frames(directory, times):
 def write_result(directory, result):
     temporary = directory / "analysis.json.tmp"
     temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(directory / "analysis.json")
-
-
-def analyze_event(marker, client, notified, cancel):
-    event = load_event(marker)
-    episode = event["episode"]
-    result = {"episode": episode, "batch": event.get("batch"), "alarm_played": False}
-    if event["demo"]:
-        return {**result, "verdict": "demo", "summary": "模拟心率，本轮图片保留在本机。"}
-    if episode in notified:
-        return {**result, "verdict": "already_alerted", "summary": "同一次心率预警已播报警报。"}
-    if event["status"] != "ready":
-        return {**result, "verdict": "uncertain", "summary": "画面采样不足，请人工查看。"}
-    frames = load_frames(marker.parent, event.get("times_ms"))
-    if cancel.is_set():
-        return {**result, "verdict": "cancelled", "summary": "录制已停止。"}
-    assessment = assess_fall(client, frames)
-    result.update(asdict(assessment))
-    if assessment.verdict == "suspected_fall" and not cancel.is_set():
-        print(f"RING_ALERT_POSSIBLE_FALL episode={episode} 疑似摔倒或倒下，请立即查看。", flush=True)
+    for attempt in range(3):
         try:
-            play_alarm()
-            result["alarm_played"] = True
-            notified.add(episode)
-        except (OSError, RuntimeError) as error:
-            result["alarm_error"] = str(error)
-            print(f"RING_ALERT_SOUND_ERROR episode={episode} 警报播放失败，请查看现场和 Windows 音频输出。", flush=True)
+            temporary.replace(directory / "analysis.json")
+            return
+        except PermissionError:
+            if attempt == 2:
+                raise
+            sleep(0.05)
+
+
+def save_result(directory, result, on_line):
+    try:
+        write_result(directory, result)
+    except OSError:
+        line = f"RING_ALERT_RESULT_SAVE_FAILED={directory.name}"
+        print(line, file=sys.stderr, flush=True)
+        if on_line:
+            on_line(line)
+
+
+def analyze_event(marker, client, notified, cancel, *, stop_alarm=None, on_line=None):
+    result = {"verdict": "pending", "summary": "", "analysis_state": "queued",
+              "alarm_state": "pending", "alarm_played": False}
+
+    def skipped(verdict, summary, reason):
+        return {**result, "verdict": verdict, "summary": summary, "analysis_state": "skipped",
+                "alarm_state": "skipped", "alarm_reason": reason}
+
+    def request_started():
+        if cancel.is_set():
+            raise InterruptedError
+        result["analysis_state"] = "requesting"
+        save_result(marker.parent, result, on_line)
+
+    def response_received():
+        result["analysis_state"] = "received"
+        save_result(marker.parent, result, on_line)
+
+    try:
+        event = load_event(marker)
+        episode = event["episode"]
+        result.update(episode=episode, batch=event.get("batch"))
+        if event["demo"]:
+            return skipped("demo", "模拟心率，本轮图片保留在本机。", "demo")
+        if episode in notified:
+            return skipped("already_alerted", "同一次心率预警已播放过警报声。", "already_alerted")
+        if event["status"] == "failed":
+            return skipped("error", "抽帧失败，请检查摄像头和录像目录。", "insufficient_frames")
+        if event["status"] != "ready":
+            return skipped("uncertain", "画面采样不足，请人工查看。", "insufficient_frames")
+        if cancel.is_set():
+            return skipped("cancelled", "分析已停止。", "stopped")
+        frames = load_frames(marker.parent, event.get("times_ms"))
+        assessment = assess_fall(client, frames, on_request=request_started, on_response=response_received)
+    except InterruptedError:
+        return skipped("cancelled", "分析已停止。", "stopped")
+    except (APIError, OSError, ValueError, TypeError) as error:
+        state = {"queued": "skipped", "requesting": "failed", "received": "received"}[result["analysis_state"]]
+        summary = "无法读取本次预警的抽帧。" if isinstance(error, OSError) else str(error)
+        return {**result, "verdict": "error", "summary": summary, "analysis_state": state,
+                "alarm_state": "skipped", "alarm_reason": "analysis_failed"}
+
+    if result["analysis_state"] == "queued":
+        return skipped(assessment.verdict, assessment.summary, "insufficient_frames")
+    result.update(asdict(assessment))
+    if assessment.verdict != "suspected_fall":
+        reason = "no_fall" if assessment.verdict == "no_visible_fall" else "uncertain"
+        return {**result, "alarm_state": "skipped", "alarm_reason": reason}
+    if cancel.is_set() or (stop_alarm is not None and stop_alarm.is_set()):
+        return {**result, "alarm_state": "skipped", "alarm_reason": "stopped"}
+    print(f"RING_ALERT_POSSIBLE_FALL episode={episode} 疑似摔倒或倒下，请立即查看。", flush=True)
+    result["alarm_state"] = "playing"
+    save_result(marker.parent, result, on_line)
+    # A stop can arrive during the progress write, before playback has started.
+    if cancel.is_set() or (stop_alarm is not None and stop_alarm.is_set()):
+        return {**result, "alarm_state": "skipped", "alarm_reason": "stopped"}
+    try:
+        play_alarm()
+        result.update(alarm_state="played", alarm_played=True)
+        notified.add(episode)
+    except (OSError, RuntimeError) as error:
+        result.update(alarm_state="failed", alarm_error=str(error))
+        print(f"RING_ALERT_SOUND_ERROR episode={episode} 警报播放失败，请查看现场和 Windows 音频输出。", flush=True)
     return result
 
 
-def watch_events(root, client, finished, cancel):
+def watch_events(root, client, finished, cancel, *, stop_alarm=None, on_line=None):
     handled = set()
     notified = set()
     while not cancel.is_set():
+        # A completed recording can publish its final batch between two directory reads.
+        recording_finished = finished.is_set()
         try:
             markers = sorted(
                 (marker for marker in root.glob("event-*/ready") if marker not in handled),
                 key=lambda marker: marker.stat().st_mtime_ns,
             )
         except OSError:
-            if finished.is_set():
+            if recording_finished:
                 return
             cancel.wait(0.25)
             continue
@@ -132,19 +191,15 @@ def watch_events(root, client, finished, cancel):
             if cancel.is_set():
                 return
             handled.add(marker)
-            try:
-                result = analyze_event(marker, client, notified, cancel)
-            except (APIError, OSError, ValueError, TypeError) as error:
-                result = {"verdict": "error", "alarm_played": False, "summary": str(error)}
+            result = analyze_event(marker, client, notified, cancel, stop_alarm=stop_alarm, on_line=on_line)
             verdict = result["verdict"]
-            print(f"RING_ALERT_RESULT={verdict} event={marker.parent.name} alarm={result['alarm_played']}", flush=True)
+            print(f"RING_ALERT_RESULT={verdict} event={marker.parent.name} alarm={result['alarm_played']} "
+                  f"analysis={result['analysis_state']} alarm_state={result['alarm_state']} "
+                  f"reason={result.get('alarm_reason', '-')}", flush=True)
             if verdict in ("uncertain", "error"):
                 print(f"需要人工查看。{result['summary']}", flush=True)
-            try:
-                write_result(marker.parent, result)
-            except OSError:
-                print("RING_ALERT_ERROR=无法保存本轮分析结果。", file=sys.stderr, flush=True)
-        if finished.is_set() and not markers:
+            save_result(marker.parent, result, on_line)
+        if recording_finished and not markers:
             return
         cancel.wait(0.25)
 
@@ -183,7 +238,7 @@ def run_recorder(executable, output, options, client, *, cancel=None, shutdown=N
     def monitor():
         root = roots.get()
         if root is not None:
-            watch_events(root, client, finished, cancel)
+            watch_events(root, client, finished, shutdown, stop_alarm=cancel, on_line=on_line)
 
     with TemporaryDirectory(prefix="connect-ring-alert-") as directory:
         stop_file = Path(directory) / "stop"
@@ -225,14 +280,19 @@ def run_recorder(executable, output, options, client, *, cancel=None, shutdown=N
                     status = recorder.wait()
             except KeyboardInterrupt:
                 cancel.set()
+                shutdown.set()
                 status = save_and_stop()
             finally:
                 reader.join()
                 finished.set()
             try:
-                worker.join(timeout=1 if cancel.is_set() else None)
+                while worker.is_alive() and not shutdown.is_set():
+                    worker.join(timeout=0.2)
+                if worker.is_alive():
+                    worker.join(timeout=1)
             except KeyboardInterrupt:
                 cancel.set()
+                shutdown.set()
             return status
 
 

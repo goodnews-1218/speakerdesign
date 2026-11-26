@@ -401,6 +401,9 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         if path == "/api/ring/stop":
             self.read_json(4096)
             return app.ring.stop()
+        if path == "/api/ring/test-alarm":
+            self.read_json(4096)
+            return app.ring.test_alarm()
         if path == "/api/describe":
             return app.describe(self.read_json(17 * 1024 * 1024))
         if path == "/api/chat":

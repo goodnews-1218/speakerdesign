@@ -1,7 +1,7 @@
 """Assess visible posture changes in a chronological set of camera frames."""
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -125,7 +125,9 @@ def read_assessment(value: dict, times_ms: Sequence[int]) -> FallAssessment:
     return FallAssessment(verdict, tuple(observations), summary)
 
 
-def assess_fall(client: DeepSeek, frames: Sequence[tuple[int, bytes]]) -> FallAssessment:
+def assess_fall(client: DeepSeek, frames: Sequence[tuple[int, bytes]], *,
+                on_request: Callable[[], None] | None = None,
+                on_response: Callable[[], None] | None = None) -> FallAssessment:
     samples = usable_frames(frames)
     if not any(change_interval(first[0], second[0]) for index, first in enumerate(samples)
                for second in samples[index + 1:]):
@@ -135,10 +137,14 @@ def assess_fall(client: DeepSeek, frames: Sequence[tuple[int, bytes]]) -> FallAs
     for index, (time_ms, jpeg) in enumerate(samples, 1):
         content.append({"type": "text", "text": f"第 {index} 帧，相对预警确认时刻 {time_ms:+d} 毫秒。"})
         content.append(jpeg_content(jpeg))
+    if on_request:
+        on_request()
     response = client.complete([
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": content},
     ], max_tokens=800, timeout=25, json_output=True)
+    if on_response:
+        on_response()
     sample_times = [time_ms for time_ms, _ in samples]
     assessment = read_assessment(client.json_data(response), sample_times)
     source_frames = {time_ms: index for index, (time_ms, _) in enumerate(frames, 1)}
