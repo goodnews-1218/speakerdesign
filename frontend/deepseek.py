@@ -30,6 +30,11 @@ class APIError(Exception):
         self.status = status
 
 
+def jpeg_content(jpeg):
+    image_url = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")
+    return {"type": "image_url", "image_url": {"url": image_url}}
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -116,19 +121,24 @@ class DeepSeek:
     def chat(self, text, jpeg=None):
         messages = [{"role": "user", "content": text}]
         if jpeg is not None:
-            image_url = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")
             messages = [
                 {"role": "system", "content": DESCRIPTION_PROMPT},
                 {"role": "user", "content": [
                     {"type": "text", "text": text},
-                    {"type": "image_url", "image_url": {"url": image_url}},
+                    jpeg_content(jpeg),
                 ]},
             ]
+        return self.complete(messages, max_tokens=450 if jpeg is not None else 1200)
+
+    def complete(self, messages, *, max_tokens, timeout=38, json_output=False):
         request = {"model": MODEL, "messages": messages, "thinking": {"type": "disabled"},
-                   "max_tokens": 450 if jpeg is not None else 1200, "stream": False}
+                   "max_tokens": max_tokens, "stream": False}
+        if json_output:
+            request["response_format"] = {"type": "json_object"}
+            request["temperature"] = 0
         result = self.json_data(self.request(
             "/chat/completions", json.dumps(request, ensure_ascii=False).encode("utf-8"),
-            "application/json", 128 * 1024, timeout=38,
+            "application/json", 128 * 1024, timeout=timeout,
         ))
         try:
             choice = result["choices"][0]
@@ -136,7 +146,8 @@ class DeepSeek:
             finish_reason = choice.get("finish_reason")
         except (AttributeError, IndexError, KeyError, TypeError) as error:
             raise APIError("DeepSeek 没有返回可用的回答。") from error
-        if not answer or finish_reason in ("length", "content_filter", "insufficient_system_resource"):
+        if (not answer or (json_output and finish_reason != "stop")
+                or finish_reason in ("length", "content_filter", "insufficient_system_resource")):
             raise APIError("DeepSeek 没有返回完整回答，请重试。")
         return answer
 

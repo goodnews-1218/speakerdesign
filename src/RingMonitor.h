@@ -17,8 +17,9 @@ class Monitor {
 public:
     using Display = std::function<void(Reading)>;
     using Save = std::function<void(Episode)>;
+    using Alert = std::function<void(std::optional<Clock::time_point>, Clock::time_point, bool)>;
 
-    Monitor(bool demo, HighlightOptions options, Display display, Save save);
+    Monitor(bool demo, HighlightOptions options, Display display, Save save, Alert alert = {});
     ~Monitor();
     void stop();
 

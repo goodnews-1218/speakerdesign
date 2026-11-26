@@ -128,7 +128,7 @@ void log(std::string message) {
 }
 
 void run(std::stop_token stop, bool demo, HighlightOptions options,
-         const Monitor::Display& display, const Monitor::Save& save) {
+         const Monitor::Display& display, const Monitor::Save& save, const Monitor::Alert& alert) {
     HighlightDetector detector(options);
     const auto start = Clock::now();
     std::wstring session;
@@ -158,6 +158,7 @@ void run(std::stop_token stop, bool demo, HighlightOptions options,
         if (!snapshot.session.empty() && (snapshot.session != session ||
             snapshot.sequence < previousSequence)) {
             if (const auto episode = detector.finish()) save(*episode);
+            if (alert) alert(std::nullopt, now, false);
             detector.reset();
             session = snapshot.session;
             previousSequence = 0;
@@ -198,6 +199,7 @@ void run(std::stop_token stop, bool demo, HighlightOptions options,
             if (update.baselineReady)
                 log("RING_BASELINE=" + std::to_string(detector.baseline()->first));
             if (update.triggered) log("RING_HIGHLIGHT_TRIGGERED=" + std::to_string(*bpm));
+            if (alert) alert(update.onset, now, detector.active());
             if (update.completed) save(*update.completed);
         }
         next = std::max(next + 1s, Clock::now() + 10ms);
@@ -205,15 +207,16 @@ void run(std::stop_token stop, bool demo, HighlightOptions options,
         wake.wait_until(lock, stop, next, [] { return false; });
     }
     if (const auto episode = detector.finish()) save(*episode);
+    if (alert) alert(std::nullopt, Clock::now(), false);
 }
 } // namespace
 
-Monitor::Monitor(bool demo, HighlightOptions options, Display display, Save save)
+Monitor::Monitor(bool demo, HighlightOptions options, Display display, Save save, Alert alert)
     : worker_([=](std::stop_token stop) {
           try {
               winrt::init_apartment();
               struct Apartment { ~Apartment() { winrt::uninit_apartment(); } } apartment;
-              run(stop, demo, options, display, save);
+              run(stop, demo, options, display, save, alert);
           } catch (const winrt::hresult_error& error) {
               display({0, demo});
               log("RING_ERROR=" + winrt::to_string(error.message()));

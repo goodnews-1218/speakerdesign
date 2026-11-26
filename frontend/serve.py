@@ -8,6 +8,7 @@ from email import policy
 from email.parser import BytesParser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -19,6 +20,7 @@ import uuid
 
 from deepseek import APIError, DeepSeek, MAX_AUDIO_BYTES, MODEL
 from recording import Recorder, RecordingError
+from ring_web import RingMonitorSession
 
 try:
     import winsound
@@ -67,9 +69,11 @@ class Playback:
         with self.lock:
             self.generation += 1
             if winsound:
+                target = Path(self.directory.name) / "response.wav"
                 try:
-                    winsound.PlaySound(None, 0)
-                    (Path(self.directory.name) / "response.wav").unlink(missing_ok=True)
+                    if target.exists():
+                        winsound.PlaySound(None, 0)
+                        target.unlink(missing_ok=True)
                 except (OSError, RuntimeError):
                     pass
             return self.generation
@@ -100,6 +104,9 @@ class ConnectStudio:
         self.deepseek = DeepSeek(key_file)
         self.media = MediaCache()
         self.playback = Playback()
+        self.ring = RingMonitorSession(bin_dir / "connect_lab.exe", device_args,
+                                       FRONTEND.parent / "recordings", self.deepseek,
+                                       self.device_lock, self.playback.stop)
 
     def status(self):
         key = self.deepseek.key()
@@ -175,9 +182,12 @@ class ConnectStudio:
 
     def close(self):
         try:
-            self.recorder.close()
+            self.ring.close()
         finally:
-            self.playback.close()
+            try:
+                self.recorder.close()
+            finally:
+                self.playback.close()
 
 
 def check_jpeg(data, status=400):
@@ -212,6 +222,22 @@ def session_id(payload):
     return value
 
 
+def requested_range(value, size):
+    if value is None:
+        return 0, size
+    match = re.fullmatch(r"bytes=([0-9]{0,19})-([0-9]{0,19})", value)
+    if not match or not size or not (match[1] or match[2]):
+        raise ValueError("Invalid range")
+    if not match[1]:
+        start, end = max(0, size - int(match[2])), size
+    else:
+        start = int(match[1])
+        end = min(size, int(match[2]) + 1) if match[2] else size
+    if start >= end:
+        raise ValueError("Invalid range")
+    return start, end
+
+
 class FrontendHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(FRONTEND / "dist"), **kwargs)
@@ -239,6 +265,44 @@ class FrontendHandler(SimpleHTTPRequestHandler):
     def json_reply(self, payload, status=200, send_body=True):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.reply(body, "application/json; charset=utf-8", status, send_body)
+
+    def stream_ring_media(self, path, content_type, send_body):
+        try:
+            file = path.open("rb")
+        except OSError:
+            self.json_reply({"error": "录像或图像暂时无法读取。"}, 404, send_body)
+            return
+        with file:
+            size = os.fstat(file.fileno()).st_size
+            range_header = self.headers.get("Range")
+            try:
+                start, end = requested_range(range_header, size)
+            except ValueError:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(206 if range_header else 200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(end - start))
+            if range_header:
+                self.send_header("Content-Range", f"bytes {start}-{end - 1}/{size}")
+            self.end_headers()
+            if send_body:
+                try:
+                    file.seek(start)
+                    remaining = end - start
+                    while remaining:
+                        data = file.read(min(remaining, 256 * 1024))
+                        if not data:
+                            break
+                        self.wfile.write(data)
+                        remaining -= len(data)
+                except OSError:
+                    pass
 
     def read_body(self, maximum):
         try:
@@ -285,6 +349,14 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             if path == "/api/status":
                 self.json_reply(app.status(), send_body=send_body)
                 return
+            if path == "/api/ring/status":
+                self.json_reply(app.ring.status(), send_body=send_body)
+                return
+            if path.startswith("/api/ring/media/"):
+                entry = app.ring.media(path.removeprefix("/api/ring/media/"))
+                if entry:
+                    self.stream_ring_media(*entry, send_body)
+                    return
             if path.startswith("/api/media/"):
                 entry = app.media.get(path.removeprefix("/api/media/"))
                 if entry:
@@ -324,6 +396,11 @@ class FrontendHandler(SimpleHTTPRequestHandler):
 
     def post_api(self, path):
         app = self.server.app
+        if path == "/api/ring/start":
+            return app.ring.start(self.read_json(4096))
+        if path == "/api/ring/stop":
+            self.read_json(4096)
+            return app.ring.stop()
         if path == "/api/describe":
             return app.describe(self.read_json(17 * 1024 * 1024))
         if path == "/api/chat":

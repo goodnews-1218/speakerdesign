@@ -15,3 +15,6 @@ std::vector<uint8_t> copyBgrCameraFrame(const ViaimConnectCameraFrame& frame,
 
 void saveCameraBitmap(const std::filesystem::path& path, const std::vector<uint8_t>& pixels,
                       uint32_t width, uint32_t height);
+
+void saveCameraJpeg(const std::filesystem::path& path, std::vector<uint8_t>& pixels,
+                    uint32_t width, uint32_t height);

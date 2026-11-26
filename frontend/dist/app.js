@@ -763,10 +763,13 @@
   $('new-session').addEventListener('click', newSession);
   $('mobile-new').addEventListener('click', newSession);
   $('mobile-history').addEventListener('click', () => { renderHistory(); $('history-dialog').showModal(); });
-  $('workspace-nav').addEventListener('click', () => { window.scrollTo({ top: 0, behavior: 'smooth' }); });
   $('history-nav').addEventListener('click', () => { renderHistory(); $('history-dialog').showModal(); });
   $('clear-history').addEventListener('click', () => { if (!history.length) return; history = []; storage.set('connect-studio-history', history); renderHistory(); toast('本机对话记录已清空。'); });
+  document.addEventListener('connect:ring-opening', () => {
+    if (cameraPending || (cameraKind && cameraKind !== 'file')) stopCamera();
+  });
   document.addEventListener('keydown', (event) => {
+    if ($('conversation-view')?.hidden) return;
     const editing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !$('settings-dialog').open && !$('history-dialog').open) { event.preventDefault(); sendQuestion(); }
     if (!editing && !event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === 'n' && !document.querySelector('dialog[open]')) { event.preventDefault(); newSession(); }

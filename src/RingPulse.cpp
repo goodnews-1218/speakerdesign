@@ -255,6 +255,7 @@ HighlightUpdate HighlightDetector::update(Clock::time_point time, std::optional<
         if (time - *candidate_ >= options_.hold) {
             active_ = true;
             result.triggered = true;
+            result.onset = candidate_;
         }
     }
     return result;

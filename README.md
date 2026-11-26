@@ -126,6 +126,25 @@ python -B -X utf8 .\scripts\voice_chat.py
 
 当前功能用于记录脉搏变化与对应视频。BPM 取自光学 PPG，运动干扰会影响读数。医疗监护与诊断需要经过相应验证的设备。
 
+### 心率预警时自动检查疑似跌倒
+
+重新编译 Windows Release 版。启动 BioScope 的戒指数据流，接好 Connect，并在 Windows 声音设置中选 Connect 为默认输出。沿用 `frontend/deepseek.env` 中的 `DEEPSEEK_API_KEY`。录像仍需要 FFmpeg 在 `PATH` 中。
+
+双击 `frontend/start.cmd` 后，在网页的「戒指预警」面板开始监测。网页会显示心率、预览画面、分析结果和保存好的录像。 [网页使用说明](frontend/README.md#在网页查看戒指预警)
+
+```powershell
+python .\frontend\ring_alert.py --ring-baseline auto
+```
+
+启动器默认持续录制，按 Ctrl+C 停止。可把 `auto` 换成已选定的个人基线或范围，也可传入 `--seconds` 做定时调试。试听警报可单独运行 `python .\frontend\ring_alert.py --test-alarm`。
+
+确认心率偏离后，程序从同一次录像中取出偏离起点附近和预警后的画面。第一批约在确认后 3 到 4 秒就绪。偏离持续时继续分批检查，同一次预警成功响铃后停止向 DeepSeek 提交后续批次。分析使用按时间排列的 JPEG 和相对时间。程序检测到有多帧证据支持疑似跌倒或突然倒地时，通过 Windows 默认输出发出本地警报声。
+
+- `recordings/session-*/video.mp4` 为正常录像，`segments/` 为分段录像，`highlight-ring-*.mp4` 为心率片段。
+- `recordings/session-*/fall-alerts/event-事件号-批次号/` 包含抽帧、相对时间和 `analysis.json`。`RING_ALERT_RESULT` 显示结果及警报播放状态。
+- 抽帧无法覆盖每个瞬间。画面遮挡、网络错误和证据不足都会记录结果，提示人工查看。抽帧无法确认昏厥或意识状态。
+- 调试可加 `--ring-demo --ring-baseline 75 --seconds 40`。模拟心率生成本地抽帧，供检查事件时间和文件。对真实预警时上传的画面，应取得画面中人员的同意。
+
 ## 学生任务
 
 src/LessonTask.h 的 recordingSummary 是可运行占位实现。只修改它，输出

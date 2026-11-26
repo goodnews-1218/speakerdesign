@@ -115,12 +115,18 @@ int main(int argc, char** argv) try {
     for (int i = 0; i <= 4; ++i)
         require(!detector.update(start + i * 1s, 110).triggered, "Short spikes do not trigger");
     detector.update(start + 5s, 90);
-    for (int i = 6; i <= 12; ++i)
-        require(detector.update(start + i * 1s, 108).triggered == (i == 12),
+    for (int i = 6; i <= 12; ++i) {
+        const auto update = detector.update(start + i * 1s, 108);
+        require(update.triggered == (i == 12),
                 "Exact upper twenty percent threshold triggers after six seconds");
+        require(update.onset.has_value() == (i == 12) && detector.active() == (i == 12),
+                "Visual checking starts at the confirmed trigger");
+        if (update.onset) require(*update.onset == start + 6s, "Initial alert carries the original onset");
+    }
     for (int i = 13; i <= 24; ++i) {
         const auto update = detector.update(start + i * 1s, i < 21 ? 110 : 90);
         require(!update.triggered, "No repeated triggers");
+        require(detector.active() == (i < 24), "Visual checking can continue until recovery is confirmed");
         require(update.completed.has_value() == (i == 24), "Wait for sustained recovery before closing");
         if (update.completed)
             require(update.completed->begin == start + 6s && update.completed->end == start + 24s,

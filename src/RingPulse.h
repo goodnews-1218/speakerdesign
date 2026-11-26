@@ -54,6 +54,7 @@ struct Episode {
 struct HighlightUpdate {
     bool baselineReady = false;
     bool triggered = false;
+    std::optional<Clock::time_point> onset;
     std::optional<Episode> completed;
 };
 
@@ -64,6 +65,7 @@ public:
     std::optional<Episode> finish();
     void reset();
     auto baseline() const { return baseline_; }
+    bool active() const { return active_; }
 
 private:
     HighlightOptions options_;

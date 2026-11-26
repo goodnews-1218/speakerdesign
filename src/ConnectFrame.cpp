@@ -4,8 +4,6 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-#include <wincodec.h>
-#include <wrl/client.h>
 
 #include <chrono>
 #include <condition_variable>
@@ -18,7 +16,6 @@
 
 namespace {
 using Clock = std::chrono::steady_clock;
-using Microsoft::WRL::ComPtr;
 
 struct Options {
     std::filesystem::path output;
@@ -189,51 +186,6 @@ void captureFrame(Capture& capture, const Options& options) {
     checkSdk(viaim_connect_destroy(sdk.release()), "Releasing the Connect SDK");
 }
 
-void checkWindows(HRESULT status, const char* operation) {
-    if (FAILED(status)) {
-        throw std::runtime_error(std::string(operation) + " failed (HRESULT " + std::to_string(status) + ")");
-    }
-}
-
-struct ComApartment {
-    ComApartment() : status(CoInitializeEx(nullptr, COINIT_MULTITHREADED)) {
-        if (status != RPC_E_CHANGED_MODE) checkWindows(status, "Initializing Windows Imaging Component");
-    }
-    ~ComApartment() { if (SUCCEEDED(status)) CoUninitialize(); }
-    ComApartment(const ComApartment&) = delete;
-    ComApartment& operator=(const ComApartment&) = delete;
-    HRESULT status;
-};
-
-void saveJpeg(const std::filesystem::path& path, Capture& capture) {
-    const ComApartment apartment;
-    ComPtr<IWICImagingFactory> factory;
-    checkWindows(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
-        IID_PPV_ARGS(factory.GetAddressOf())), "Opening the imaging factory");
-
-    ComPtr<IWICStream> stream;
-    checkWindows(factory->CreateStream(stream.GetAddressOf()), "Creating an image stream");
-    checkWindows(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE), "Opening the output file");
-
-    ComPtr<IWICBitmapEncoder> encoder;
-    checkWindows(factory->CreateEncoder(GUID_ContainerFormatJpeg, nullptr, encoder.GetAddressOf()), "Creating a JPEG encoder");
-    checkWindows(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache), "Initializing the JPEG encoder");
-
-    ComPtr<IWICBitmapFrameEncode> image;
-    checkWindows(encoder->CreateNewFrame(image.GetAddressOf(), nullptr), "Creating a JPEG frame");
-    checkWindows(image->Initialize(nullptr), "Initializing the JPEG frame");
-    checkWindows(image->SetSize(capture.mode.width, capture.mode.height), "Setting the image size");
-    WICPixelFormatGUID format = GUID_WICPixelFormat24bppBGR;
-    checkWindows(image->SetPixelFormat(&format), "Setting the image pixel format");
-    if (!IsEqualGUID(format, GUID_WICPixelFormat24bppBGR)) {
-        throw std::runtime_error("The JPEG encoder did not accept BGR24 pixels");
-    }
-    const UINT stride = capture.mode.width * 3;
-    checkWindows(image->WritePixels(capture.mode.height, stride, static_cast<UINT>(capture.pixels.size()),
-                                    capture.pixels.data()), "Writing the JPEG pixels");
-    checkWindows(image->Commit(), "Finalizing the JPEG frame");
-    checkWindows(encoder->Commit(), "Saving the JPEG image");
-}
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -253,7 +205,7 @@ int wmain(int argc, wchar_t** argv) {
         Capture capture;
         captureFrame(capture, options);
         if (options.jpeg) {
-            saveJpeg(options.output, capture);
+            saveCameraJpeg(options.output, capture.pixels, capture.mode.width, capture.mode.height);
         } else {
             saveCameraBitmap(options.output, capture.pixels, capture.mode.width, capture.mode.height);
         }

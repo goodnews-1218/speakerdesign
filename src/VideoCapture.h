@@ -8,16 +8,19 @@
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
+class RingAlertFrames;
+
 class VideoCapture {
 public:
     explicit VideoCapture(const std::filesystem::path& directory, bool microphone = true,
                           unsigned segmentSeconds = 120, bool ringOverlay = false,
-                          bool ringDemo = false);
+                          bool ringDemo = false, bool fallAlert = false, bool fallAlertPreview = false);
     ~VideoCapture();
 
     void open(ViaimConnectSdk* sdk);
@@ -26,6 +29,7 @@ public:
     bool requestHighlight(std::chrono::steady_clock::time_point marked = std::chrono::steady_clock::now());
     bool requestRingHighlight(ring::Episode episode);
     void ringReading(ring::Reading reading);
+    void ringAlert(std::optional<ring::Clock::time_point> onset, ring::Clock::time_point now, bool active);
     void audioWritten(bool microphone, uint64_t bytes) noexcept;
     bool failed();
     void stop();
@@ -41,6 +45,7 @@ private:
         uint64_t index;
         bool snapshot;
         ring::Reading pulse;
+        Clock::time_point captured;
     };
 
     void encode() noexcept;
@@ -56,6 +61,7 @@ private:
     const unsigned segmentSeconds_;
     const unsigned fragmentSeconds_;
     const bool ringOverlay_;
+    std::unique_ptr<RingAlertFrames> fallAlert_;
     ViaimConnectCameraOpenOptions mode_ = VIAIM_CONNECT_CAMERA_OPEN_OPTIONS_INIT;
     std::mutex mutex_;
     std::condition_variable ready_;

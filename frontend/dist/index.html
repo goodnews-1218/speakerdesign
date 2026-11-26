@@ -4,11 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#146b57">
-  <meta name="description" content="声境 Connect：音箱画面、语音识别与 AI 对话的本地工作台。">
+  <meta name="description" content="声境 Connect 的本地工作台，支持音箱画面、语音对话和戒指心率预警。">
   <title>声境 · Connect 对话工作台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23146b57'/%3E%3Cpath d='M16 28v8m8-16v24m8-30v36m8-30v24m8-16v8' stroke='white' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="ring.css">
   <script src="app.js" defer></script>
+  <script src="ring.js" defer></script>
 </head>
 <body>
   <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -39,7 +41,8 @@
     <a class="brand" href="./" aria-label="声境首页"><span class="brand-mark"><svg class="icon"><use href="#i-wave"/></svg></span><span>声境<span class="brand-en">CONNECT STUDIO</span></span></a>
     <button class="new-session" id="new-session"><svg class="icon"><use href="#i-plus"/></svg>开启新对话<span class="key-hint">N</span></button>
     <div class="sidebar-label">工作空间</div>
-    <button class="nav-item active" id="workspace-nav"><svg class="icon"><use href="#i-grid"/></svg>对话工作台<span class="nav-indicator"></span></button>
+    <button class="nav-item active" id="workspace-nav" aria-controls="conversation-view" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#i-grid"/></svg>对话工作台</button>
+    <button class="nav-item" id="ring-nav" aria-controls="ring-monitor"><svg class="icon" aria-hidden="true"><use href="#i-wave"/></svg>戒指预警</button>
     <button class="nav-item" id="history-nav"><svg class="icon"><use href="#i-clock"/></svg>对话记录<span class="nav-count" id="history-count">0</span></button>
     <div class="history-heading"><span class="sidebar-label">最近对话</span><span class="local-label">仅本机</span></div>
     <div class="recent-list" id="recent-list"><p class="history-empty">从一句话开始，<br>让想法被听见。</p></div>
@@ -50,8 +53,13 @@
   </aside>
 
   <div class="page-shell">
-    <header class="topbar"><div class="breadcrumbs"><span>工作空间</span><span>/</span><strong>对话工作台</strong></div><div class="topbar-actions"><button class="icon-button mobile-tool" id="mobile-new" aria-label="新对话"><svg class="icon"><use href="#i-plus"/></svg></button><button class="icon-button mobile-tool" id="mobile-history" aria-label="查看对话记录"><svg class="icon"><use href="#i-clock"/></svg></button><span class="connection-label" id="connection-label"><span class="status-dot"></span>设备未连接</span><button class="subtle-button" id="settings-button"><svg class="icon"><use href="#i-settings"/></svg>连接设置</button></div></header>
+    <header class="topbar"><div class="breadcrumbs"><span>工作空间</span><span>/</span><strong id="workspace-breadcrumb">对话工作台</strong></div><div class="topbar-actions"><button class="icon-button mobile-tool" id="mobile-new" aria-label="新对话"><svg class="icon"><use href="#i-plus"/></svg></button><button class="icon-button mobile-tool" id="mobile-history" aria-label="查看对话记录"><svg class="icon"><use href="#i-clock"/></svg></button><span class="connection-label" id="connection-label"><span class="status-dot"></span>设备未连接</span><button class="subtle-button" id="settings-button"><svg class="icon"><use href="#i-settings"/></svg>连接设置</button></div></header>
+    <nav class="workspace-mobile-nav" aria-label="切换工作台">
+      <button id="mobile-workspace-nav" type="button" aria-controls="conversation-view" aria-current="page">对话工作台</button>
+      <button id="mobile-ring-nav" type="button" aria-controls="ring-monitor">戒指预警</button>
+    </nav>
     <main>
+      <div id="conversation-view">
       <section class="page-heading"><div><p class="eyebrow">SEE. LISTEN. UNDERSTAND.</p><h1>让对话，自然发生<span class="heading-dot">。</span></h1><p class="page-description">看见音箱的视角，听见你的想法，让 AI 接住每一句话。</p></div><button class="outline-button" id="export-button"><svg class="icon"><use href="#i-download"/></svg>导出对话</button></section>
       <section class="mode-banner" aria-label="当前工作模式"><div><span class="demo-icon"><svg class="icon"><use href="#i-spark"/></svg></span><div><strong id="mode-title">先体验，再连接</strong><span id="mode-description">当前为演示模式，示例内容不来自音箱或大模型。</span></div></div><button id="demo-button">播放对话演示<svg class="icon"><use href="#i-play"/></svg></button></section>
 
@@ -93,6 +101,104 @@
           <audio id="reply-audio" preload="none" hidden></audio>
         </section>
       </div>
+      </div>
+
+      <section id="ring-monitor" class="ring-workspace" aria-labelledby="ring-title" hidden>
+        <header class="ring-header">
+          <div>
+            <h1 id="ring-title" tabindex="-1">戒指预警</h1>
+            <p>监测心率偏离，结合现场画面提示疑似跌倒。</p>
+          </div>
+          <span class="ring-badge" id="ring-state" role="status">尚未启动</span>
+        </header>
+
+        <div class="ring-layout">
+          <section class="panel ring-preview-panel" aria-labelledby="ring-preview-title">
+            <header class="panel-header">
+              <div class="panel-title">
+                <svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg>
+                <h2 id="ring-preview-title">监测画面</h2>
+              </div>
+              <span id="ring-preview-state" class="ring-muted">等待录制</span>
+            </header>
+            <div class="ring-preview-stage">
+              <p id="ring-preview-empty" class="ring-preview-empty">
+                <svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg>
+                <span>启动监测后显示音箱摄像头画面</span>
+              </p>
+              <img id="ring-preview" alt="音箱摄像头的最新监测画面" hidden>
+            </div>
+          </section>
+
+          <section class="panel ring-control-panel" aria-labelledby="ring-control-title">
+            <div class="panel-header">
+              <div class="panel-title">
+                <svg class="icon" aria-hidden="true"><use href="#i-wave"/></svg>
+                <h2 id="ring-control-title">心率监测</h2>
+              </div>
+              <span id="ring-demo-badge" class="ring-badge ring-badge-warn" hidden>模拟心率</span>
+            </div>
+            <div class="ring-readout" aria-label="每分钟心跳次数">
+              <span id="ring-bpm">—</span><span class="ring-unit">BPM</span>
+            </div>
+            <p class="ring-pulse-label" id="ring-pulse-label">等待戒指读数</p>
+            <dl class="ring-metrics">
+              <div><dt>本轮基线</dt><dd id="ring-baseline-value">—</dd></div>
+              <div><dt>预警次数</dt><dd id="ring-warning-count">0</dd></div>
+            </dl>
+            <form id="ring-form" class="ring-form">
+              <div class="ring-form-row">
+                <div class="ring-form-field">
+                  <label for="ring-baseline-input">心率基线</label>
+                  <input id="ring-baseline-input" type="text" value="auto" maxlength="20" autocomplete="off" aria-describedby="ring-baseline-help">
+                </div>
+                <label class="ring-check"><input id="ring-demo-input" type="checkbox">模拟心率</label>
+              </div>
+              <p id="ring-baseline-help" class="ring-help">使用 auto 自动校准，也可输入个人基线，如 75 或 65:85。</p>
+              <p class="ring-help" id="ring-start-help">连接戒指并启动 BioScope 数据流。预警时会把抽帧发给 DeepSeek。</p>
+              <div class="ring-actions">
+                <button id="ring-start" type="submit" class="primary-button" disabled>开始监测</button>
+                <button id="ring-stop" type="button" class="outline-button" disabled>停止监测</button>
+              </div>
+            </form>
+            <p id="ring-status-message" class="ring-status-message" role="status" hidden></p>
+          </section>
+        </div>
+
+        <div class="ring-layout ring-review-layout">
+          <section class="panel ring-review-panel" aria-labelledby="ring-events-title">
+            <header class="panel-header">
+              <div class="panel-title">
+                <svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg>
+                <h2 id="ring-events-title">预警记录</h2>
+              </div>
+              <span id="ring-event-count" class="ring-muted"></span>
+            </header>
+            <p id="ring-events-empty" class="ring-empty">本轮监测暂无预警。</p>
+            <p id="ring-event-update" class="sr-only" role="status"></p>
+            <div id="ring-events" class="ring-event-list"></div>
+          </section>
+
+          <section class="panel ring-review-panel" aria-labelledby="ring-recordings-title">
+            <header class="panel-header">
+              <div class="panel-title">
+                <svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>
+                <h2 id="ring-recordings-title">录像回看</h2>
+              </div>
+              <span id="ring-video-count" class="ring-muted"></span>
+            </header>
+            <p id="ring-videos-empty" class="ring-empty">完成的录像和预警片段会显示在这里。</p>
+            <div class="ring-player" id="ring-player" hidden>
+              <p id="ring-video-name" class="ring-player-title"></p>
+              <video id="ring-video" controls playsinline preload="metadata" aria-labelledby="ring-video-name"></video>
+              <p id="ring-video-error" class="ring-status-message" role="status" hidden></p>
+            </div>
+            <ul id="ring-videos" class="ring-video-list" aria-label="选择已保存录像"></ul>
+          </section>
+        </div>
+        <p class="ring-footnote">用于现场辅助查看。姿势和动作可见时才有判断依据，预警需要人工确认。</p>
+      </section>
+
       <footer class="page-footer"><span>CONNECT STUDIO <span class="footer-divider">/</span> 为自然的交流而设计</span><span id="footer-status">音箱未连接 · 模型未连接</span></footer>
     </main>
   </div>

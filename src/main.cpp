@@ -270,6 +270,7 @@ int main(int argc, char** argv) {
     int segmentSeconds=120, highlightButton=-1;
 #ifdef CONNECT_LAB_VIDEO
     bool useRing=false, ringDemo=false, ringOnly=false, ringTuning=false, fixedDuration=false;
+    bool fallAlert=false, fallAlertPreview=false;
     ring::HighlightOptions ringOptions;
 #endif
 #ifdef CONNECT_LAB_VOICE
@@ -289,6 +290,8 @@ int main(int argc, char** argv) {
                 std::cout<<"Add --ring with --video for a PPG pulse overlay (BioScope must already be streaming).\n"
                            "Use --ring-monitor for standalone terminal pulse readings; --ring-demo uses synthetic PPG.\n"
                            "Add --ring-auto-highlight to save sustained pulse changes with video.\n"
+                           "Use frontend/ring_alert.py for automatic visual checks and audio alerts.\n"
+                           "The launcher enables --fall-alert to prepare samples from the recording.\n"
                            "Ring options: --ring-baseline auto|90|70:80, --ring-change-percent 20,\n"
                            "              --ring-hold-seconds 6, --ring-calibration-seconds 30.\n";
 #endif
@@ -305,6 +308,8 @@ int main(int argc, char** argv) {
             if(key=="--ring-demo") {useRing=true;ringDemo=true;continue;}
             if(key=="--ring-monitor") {useRing=true;ringOnly=true;continue;}
             if(key=="--ring-auto-highlight") {ringOptions.enabled=true;continue;}
+            if(key=="--fall-alert") {fallAlert=true;continue;}
+            if(key=="--fall-alert-preview") {fallAlertPreview=true;continue;}
 #endif
 #ifdef CONNECT_LAB_VOICE
             if(key=="--voice-chat-input") {voiceChat=true;continue;}
@@ -377,6 +382,10 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Ring overlay requires --video; use --ring-monitor for terminal readings");
         if((ringOptions.enabled && !(useRing && recordVideo)) || (ringTuning && !ringOptions.enabled))
             throw std::runtime_error("Ring highlight settings require --video --ring --ring-auto-highlight");
+        if(fallAlert && !(useRing && recordVideo && ringOptions.enabled))
+            throw std::runtime_error("--fall-alert requires --video --ring --ring-auto-highlight");
+        if(fallAlertPreview && !fallAlert)
+            throw std::runtime_error("--fall-alert-preview requires --fall-alert");
 #endif
 #ifdef CONNECT_LAB_VOICE
         if(voiceSnapshot && (!recordVideo || mode=="spk"))
@@ -421,7 +430,8 @@ int main(int argc, char** argv) {
         }
 #ifdef CONNECT_LAB_VIDEO
         if(recordVideo)
-            c.video=std::make_unique<VideoCapture>(c.directory,mode!="spk",segmentSeconds,useRing,ringDemo);
+            c.video=std::make_unique<VideoCapture>(
+                c.directory,mode!="spk",segmentSeconds,useRing,ringDemo,fallAlert,fallAlertPreview);
         c.highlightButton=highlightButton;
 #endif
 #ifdef CONNECT_LAB_VOICE
@@ -481,6 +491,7 @@ int main(int argc, char** argv) {
 #ifdef CONNECT_LAB_VIDEO
         if(c.video) {
             c.video->start();
+            if(fallAlert) log("FALL_ALERT_ROOT="+utf8Path(std::filesystem::absolute(c.directory / "fall-alerts")));
             log("Video recording active; press S for a snapshot or H for a highlight");
             if(useRing) {
                 auto* video=c.video.get();
@@ -488,6 +499,9 @@ int main(int argc, char** argv) {
                     [video](ring::Reading reading) { video->ringReading(reading); },
                     [video](ring::Episode episode) {
                         if(!video->requestRingHighlight(episode)) log("RING_HIGHLIGHT_UNAVAILABLE");
+                    },
+                    [video](auto onset, auto now, bool active) {
+                        video->ringAlert(onset, now, active);
                     });
             }
         }

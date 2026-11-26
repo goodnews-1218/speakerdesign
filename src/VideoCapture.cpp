@@ -1,4 +1,5 @@
 #include "VideoCapture.h"
+#include "RingAlertFrames.h"
 #include "RingOverlay.h"
 #include "CameraCaptureSupport.h"
 
@@ -109,13 +110,23 @@ void writeFrame(HANDLE pipe, const std::vector<uint8_t>& pixels) {
 } // namespace
 
 VideoCapture::VideoCapture(const std::filesystem::path& directory, bool microphone,
-                           unsigned segmentSeconds, bool ringOverlay, bool ringDemo)
+                           unsigned segmentSeconds, bool ringOverlay, bool ringDemo,
+                           bool fallAlert, bool fallAlertPreview)
     : directory_(std::filesystem::absolute(directory)), ffmpeg_(findFfmpeg()),
       audio_(directory_ / (microphone ? "mic.wav" : "spk.wav")), microphone_(microphone),
       segmentSeconds_(segmentSeconds), fragmentSeconds_(segmentSeconds % 2 == 0 ? 2 : 1),
       ringOverlay_(ringOverlay), ringReading_{0, ringDemo} {
     std::filesystem::create_directory(directory_ / ".video-chunks");
     std::filesystem::create_directory(directory_ / "segments");
+    if (fallAlert) {
+#ifdef CONNECT_LAB_SIMULATED
+        constexpr bool simulated = true;
+#else
+        constexpr bool simulated = false;
+#endif
+        fallAlert_ = std::make_unique<RingAlertFrames>(
+            directory_ / "fall-alerts", ringDemo || simulated, fallAlertPreview);
+    }
 }
 
 VideoCapture::~VideoCapture() {
@@ -157,6 +168,11 @@ bool VideoCapture::requestRingHighlight(ring::Episode episode) {
 void VideoCapture::ringReading(ring::Reading reading) {
     std::lock_guard lock(mutex_);
     ringReading_ = reading;
+}
+
+void VideoCapture::ringAlert(std::optional<ring::Clock::time_point> onset,
+                             ring::Clock::time_point now, bool active) {
+    if (fallAlert_) fallAlert_->pulse(onset, now, active);
 }
 
 uint64_t VideoCapture::frameAt(Clock::time_point time) const {
@@ -228,7 +244,7 @@ void VideoCapture::receive(const ViaimConnectCameraFrame& frame) noexcept {
             ++dropped_;
             return;
         }
-        queue_.push_back({std::move(pixels), index, snapshotPending_, ringReading_});
+        queue_.push_back({std::move(pixels), index, snapshotPending_, ringReading_, captured});
         snapshotPending_ = false;
         ready_.notify_one();
     } catch (const std::exception&) {
@@ -279,6 +295,7 @@ void VideoCapture::encode() noexcept {
                 }
             }
             if (frame.index < written_) continue;
+            if (fallAlert_) fallAlert_->sample(frame.captured, frame.pixels, mode_.width, mode_.height);
             if (ringOverlay_)
                 ring::drawOverlay(frame.pixels, mode_.width, mode_.height,
                                   double(frame.index) / mode_.fps, frame.pulse);
@@ -304,6 +321,7 @@ bool VideoCapture::finish() {
     stop();
     if (!worker_.joinable()) return false;
     worker_.join();
+    if (fallAlert_) fallAlert_->finish();
     {
         std::lock_guard lock(mutex_);
         finalized_ = true;
