@@ -44,12 +44,16 @@ const SherpaOnnxOfflineRecognizer* createRecognizer() {
     return recognizer;
 }
 
-bool isPhotoCommand(std::string text) {
+std::string stripCommandPunctuation(std::string text) {
     for (const std::string punctuation : {" ", "\t", "\r", "\n", "，", "。", "！", "？", "、", ",", ".", "!", "?"}) {
         for (auto position = text.find(punctuation); position != std::string::npos;
              position = text.find(punctuation, position))
             text.erase(position, punctuation.size());
     }
+    return text;
+}
+
+bool isPhotoCommand(const std::string& text) {
     static const std::regex command(
         "(请|請|麻烦|麻煩)?(帮我|幫我|给我|給我)?"
         "(拍照|照相|拍(一)?(张|張)(照片|相片|照)|照(一)?(张|張)(照片|相片|照)?|"
@@ -57,10 +61,21 @@ bool isPhotoCommand(std::string text) {
         "(一下|吧|谢谢|謝謝)?");
     return std::regex_match(text, command);
 }
+
+bool isHighlightCommand(const std::string& text) {
+    static const std::regex command(
+        "(请|請|麻烦|麻煩)?(帮我|幫我|给我|給我)?"
+        "(保存(一下)?(精彩片段|高光片段|这段视频|這段影片)|标记(精彩片段|高光片段))"
+        "(吧|谢谢|謝謝)?");
+    return std::regex_match(text, command);
+}
 } // namespace
 
 VoiceSnapshot::VoiceSnapshot(VideoCapture& video, void (*log)(const std::string&))
-    : video_(video), log_(log), recognizer_(createRecognizer()) {}
+    : video_(&video), log_(log), recognizer_(createRecognizer()) {}
+
+VoiceSnapshot::VoiceSnapshot(void (*log)(const std::string&))
+    : video_(nullptr), log_(log), recognizer_(createRecognizer()) {}
 
 VoiceSnapshot::~VoiceSnapshot() {
     stop();
@@ -73,7 +88,7 @@ void VoiceSnapshot::start() {
 
 void VoiceSnapshot::submit(const std::vector<uint8_t>& pcm) noexcept {
     std::lock_guard lock(mutex_);
-    if (stopping_) return;
+    if (stopping_ || paused_) return;
     if (pcm.size() > maxQueuedBytes - queuedBytes_) {
         queue_.clear();
         queuedBytes_ = 0;
@@ -87,6 +102,11 @@ void VoiceSnapshot::submit(const std::vector<uint8_t>& pcm) noexcept {
     } catch (const std::exception&) {
         gap_ = true;
     }
+}
+
+void VoiceSnapshot::resume() {
+    std::lock_guard lock(mutex_);
+    paused_ = false;
 }
 
 void VoiceSnapshot::stop() {
@@ -103,8 +123,12 @@ void VoiceSnapshot::listen() noexcept {
         std::array<float, frameSize> frame{};
         std::deque<float> preRoll;
         std::vector<float> utterance;
+        using Clock = std::chrono::steady_clock;
+        Clock::time_point onset;
         size_t filled = 0, voiced = 0, silence = 0;
         bool discard = false;
+        const size_t silenceLimit = video_ ? 16 : 28;
+        const size_t utteranceLimit = (video_ ? 3 : 20) * sampleRate;
 
         for (;;) {
             std::vector<uint8_t> pcm;
@@ -123,6 +147,7 @@ void VoiceSnapshot::listen() noexcept {
                 queue_.pop_front();
                 queuedBytes_ -= pcm.size();
             }
+            const auto blockEnd = Clock::now();
             for (size_t i = 0; i + 1 < pcm.size(); i += 2) {
                 const auto bits = static_cast<uint16_t>(pcm[i] | (pcm[i + 1] << 8));
                 frame[filled++] = std::bit_cast<int16_t>(bits) / 32768.0f;
@@ -131,10 +156,10 @@ void VoiceSnapshot::listen() noexcept {
                 float energy = 0;
                 for (const float value : frame) energy += value * value;
                 const bool speech = energy / frameSize >= 0.002f * 0.002f;
-                silence = speech ? 0 : (silence < 16 ? silence + 1 : 16);
+                silence = speech ? 0 : (silence < silenceLimit ? silence + 1 : silenceLimit);
 
                 if (discard) {
-                    if (silence >= 16) discard = false;
+                    if (silence >= silenceLimit) discard = false;
                     continue;
                 }
                 if (utterance.empty() && !speech) {
@@ -144,14 +169,17 @@ void VoiceSnapshot::listen() noexcept {
                     continue;
                 }
                 if (utterance.empty()) {
+                    onset = blockEnd - std::chrono::microseconds(
+                        1000000LL * (pcm.size() - i) / (sampleRate * 2))
+                        - std::chrono::milliseconds(20);
                     utterance.assign(preRoll.begin(), preRoll.end());
                     preRoll.clear();
                 }
                 utterance.insert(utterance.end(), frame.begin(), frame.end());
                 if (speech) ++voiced;
-                if (silence >= 16 || utterance.size() >= 3 * sampleRate) {
-                    if (silence >= 16 && voiced >= 6) recognize(utterance);
-                    discard = silence < 16;
+                if (silence >= silenceLimit || utterance.size() >= utteranceLimit) {
+                    if ((silence >= silenceLimit || !video_) && voiced >= 6) recognize(utterance, onset);
+                    discard = video_ && silence < silenceLimit;
                     utterance.clear();
                     voiced = 0;
                 }
@@ -164,7 +192,8 @@ void VoiceSnapshot::listen() noexcept {
     }
 }
 
-void VoiceSnapshot::recognize(const std::vector<float>& samples) {
+void VoiceSnapshot::recognize(const std::vector<float>& samples,
+                              std::chrono::steady_clock::time_point onset) {
     std::unique_ptr<const SherpaOnnxOfflineStream, decltype(&SherpaOnnxDestroyOfflineStream)>
         stream(SherpaOnnxCreateOfflineStream(recognizer_), SherpaOnnxDestroyOfflineStream);
     if (!stream) throw std::runtime_error("Could not create a recognition stream");
@@ -174,9 +203,26 @@ void VoiceSnapshot::recognize(const std::vector<float>& samples) {
     std::unique_ptr<const SherpaOnnxOfflineRecognizerResult,
                     decltype(&SherpaOnnxDestroyOfflineRecognizerResult)>
         result(SherpaOnnxGetOfflineStreamResult(stream.get()), SherpaOnnxDestroyOfflineRecognizerResult);
-    if (!result || !result->text || !isPhotoCommand(result->text)) return;
+    if (!result || !result->text || !*result->text) return;
+    std::string text(result->text);
 
     std::lock_guard lock(mutex_);
-    if (!stopping_ && !gap_ && video_.requestSnapshot())
-        log_(std::string("VOICE_SNAPSHOT_REQUESTED=") + result->text);
+    if (stopping_ || gap_ || paused_) return;
+    if (video_) {
+        const auto command = stripCommandPunctuation(text);
+        if (isHighlightCommand(command)) {
+            if (!video_->requestHighlight(onset)) log_("HIGHLIGHT_UNAVAILABLE");
+        } else if (isPhotoCommand(command) && video_->requestSnapshot()) {
+            log_("VOICE_SNAPSHOT_REQUESTED=" + text);
+        }
+        return;
+    }
+    // Do not transcribe the response played by the speaker.
+    paused_ = true;
+    queue_.clear();
+    queuedBytes_ = 0;
+    for (char& character : text) {
+        if (character == '\r' || character == '\n') character = ' ';
+    }
+    log_("VOICE_CHAT_TEXT=" + text);
 }

@@ -3,9 +3,10 @@
 #include "Sdk.h"
 
 #include <filesystem>
+#include <functional>
 #include <vector>
 
-ViaimConnectCameraOpenOptions openCaptureCamera(ViaimConnectSdk* sdk);
+ViaimConnectCameraOpenOptions openCaptureCamera(ViaimConnectSdk* sdk, const std::function<void()>& beforeTry);
 
 // Returns an empty vector for an invalid frame. The SDK lends the source pixels
 // only for the duration of the frame callback.

@@ -161,7 +161,10 @@ void captureFrame(Capture& capture, const Options& options) {
         }
     }
 
-    const auto mode = openCaptureCamera(sdk.get());
+    const auto mode = openCaptureCamera(sdk.get(), [&capture] {
+        std::lock_guard lock(capture.mutex);
+        capture.cameraFailed = false;
+    });
     {
         std::unique_lock lock(capture.mutex);
         capture.mode = mode;

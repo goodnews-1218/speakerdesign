@@ -65,3 +65,24 @@ button,.new-session,.nav-item,.subtle-button,.outline-button,.page-heading .outl
   font-size: .875rem;
   color: #50685d;
 }
+
+/* Keep our toolbar below the browser's playback controls. */
+.video-stage.has-playback {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+.video-stage.has-playback video {
+  min-height: 0;
+}
+.video-stage.has-playback .video-bottomline {
+  position: static;
+  gap: 8px;
+  padding: 4px 16px;
+  background: #182823;
+}
+.video-stage.has-playback #camera-source-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

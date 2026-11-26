@@ -14,6 +14,7 @@
 #endif
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <csignal>
 #include <deque>
@@ -23,6 +24,7 @@
 #include <thread>
 #include <vector>
 #include <string>
+#include <syncstream>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -30,9 +32,8 @@
 using namespace std::chrono_literals;
 static volatile std::sig_atomic_t interrupted=0;
 static void signalHandler(int) { interrupted=1; }
-static std::mutex consoleMutex;
 static void log(const std::string& s) {
-    std::lock_guard<std::mutex> lock(consoleMutex); std::cout << s << std::endl;
+    std::osyncstream(std::cout) << s << '\n' << std::flush_emit;
 }
 
 struct Block { bool mic; std::vector<uint8_t> bytes; };
@@ -51,9 +52,11 @@ struct Context {
     std::filesystem::path directory;
 #ifdef CONNECT_LAB_VIDEO
     std::unique_ptr<VideoCapture> video;
+    int highlightButton=-1;
 #endif
 #ifdef CONNECT_LAB_VOICE
     std::unique_ptr<VoiceSnapshot> voice;
+    bool voiceChat=false;
 #endif
 
     void writer() noexcept {
@@ -67,10 +70,22 @@ struct Context {
                     if(blocks.empty() && quitWriter) break;
                     b=std::move(blocks.front()); blocks.pop_front(); queuedBytes-=b.bytes.size();
                 }
-                auto& file=b.mic?mic:spk;
-                if(!file) file=std::make_unique<WavWriter>(directory/(b.mic?"mic.wav":"spk.wav"));
-                file->append(b.bytes.data(),b.bytes.size());
-                (b.mic?micBytes:spkBytes).fetch_add(b.bytes.size());
+#ifdef CONNECT_LAB_VOICE
+                if(!voiceChat)
+#endif
+                {
+                    auto& file=b.mic?mic:spk;
+                    if(!file) file=std::make_unique<WavWriter>(directory/(b.mic?"mic.wav":"spk.wav"));
+                    file->append(b.bytes.data(),b.bytes.size());
+                }
+                auto& bytes=b.mic?micBytes:spkBytes;
+                bytes.fetch_add(b.bytes.size());
+#ifdef CONNECT_LAB_VIDEO
+                if(video) {
+                    (b.mic?mic:spk)->flush();
+                    video->audioWritten(b.mic,bytes.load());
+                }
+#endif
 #ifdef CONNECT_LAB_VOICE
                 if(b.mic && voice) voice->submit(b.bytes);
 #endif
@@ -104,6 +119,21 @@ static void __cdecl onError(ViaimConnectResult code,const char* message,void*) {
 static void __cdecl onEvent(const ViaimConnectEvent* event,void* data) {
     if(!event) return;
     auto& c=*static_cast<Context*>(data);
+#ifdef CONNECT_LAB_VIDEO
+    constexpr auto keyFields=VIAIM_CONNECT_KEY_FIELD_KEY | VIAIM_CONNECT_KEY_FIELD_ACTION;
+    if(c.video && event->command.id==VIAIM_CONNECT_COMMAND_KEY_REPORT &&
+       event->command.operation==VIAIM_CONNECT_OPERATION_REPORT &&
+       (event->command.present_fields & keyFields)==keyFields) {
+        const auto& key=event->command.payload.key;
+        log("DEVICE_KEY="+std::to_string(key.key)+" ACTION="+std::to_string(key.action));
+        if(key.key==c.highlightButton && key.action==2) {
+            try {
+                if(!c.video->requestHighlight()) log("HIGHLIGHT_UNAVAILABLE");
+            } catch(const std::exception& error) {log(std::string("HIGHLIGHT_ERROR: ")+error.what());}
+        }
+        return;
+    }
+#endif
     std::lock_guard<std::mutex> lock(c.mutex);
     if(c.queryPending && event->command.id==VIAIM_CONNECT_COMMAND_FUNCTION_MODE &&
        event->command.operation==VIAIM_CONNECT_OPERATION_RESPONSE) {
@@ -207,6 +237,16 @@ static bool recordingCommand(ViaimConnectSdk* sdk,Context& c,const std::string& 
     return ok;
 }
 
+#ifdef CONNECT_LAB_VIDEO
+static double ringNumber(const std::string& value, double minimum, double maximum) {
+    size_t used = 0;
+    const auto number = std::stod(value, &used);
+    if (used != value.size() || !std::isfinite(number) || number < minimum || number > maximum)
+        throw std::runtime_error("Ring setting is outside its supported range: " + value);
+    return number;
+}
+#endif
+
 static std::string utf8Path(const std::filesystem::path& path) {
     const auto value = path.u8string();
     return {value.begin(), value.end()};
@@ -226,23 +266,49 @@ int main(int argc, char** argv) {
     std::string mode="mic";int seconds=10,timeout=15;unsigned long vid=0,pid=0;
     std::filesystem::path output="recordings";
     std::filesystem::path stopFile;
-    bool recordVideo=false;
+    bool recordVideo=false, continuous=false;
+    int segmentSeconds=120, highlightButton=-1;
+#ifdef CONNECT_LAB_VIDEO
+    bool useRing=false, ringDemo=false, ringOnly=false, ringTuning=false, fixedDuration=false;
+    ring::HighlightOptions ringOptions;
+#endif
 #ifdef CONNECT_LAB_VOICE
-    bool voiceSnapshot=false;
+    bool voiceSnapshot=false, voiceChat=false;
 #endif
     try {
         for(int i=1;i<argc;) {
             const auto key = utf8Path(argv[i++]);
             if(key=="--help") {
                 std::cout<<"connect_lab --mode mic|spk|both --seconds 10 --output recordings [--vid 0x2207 --pid 0x0017] [--connect-timeout 15] [--video]\n";
-                std::cout<<"With --video, press S in the terminal to save a snapshot while recording.\n";
-                std::cout<<"With --stop-file PATH, creating that file stops recording and saves the WAV.\n";
+                std::cout<<"With --video, press S for a snapshot or H for a highlight (20 seconds before and after).\n"
+                           "Use --continuous for video until Ctrl+C, or --seconds N for a fixed duration.\n"
+                           "With --stop-file PATH, creating that file stops recording and saves the WAV.\n"
+                           "Video segments default to 120 seconds; set --segment-seconds N to override.\n"
+                           "Use --highlight-button 0..8 to mark on a matching device single-click.\n";
+#ifdef CONNECT_LAB_VIDEO
+                std::cout<<"Add --ring with --video for a PPG pulse overlay (BioScope must already be streaming).\n"
+                           "Use --ring-monitor for standalone terminal pulse readings; --ring-demo uses synthetic PPG.\n"
+                           "Add --ring-auto-highlight to save sustained pulse changes with video.\n"
+                           "Ring options: --ring-baseline auto|90|70:80, --ring-change-percent 20,\n"
+                           "              --ring-hold-seconds 6, --ring-calibration-seconds 30.\n";
+#endif
 #ifdef CONNECT_LAB_VOICE
                 std::cout<<"Add --voice-snapshot with --video and a microphone mode for offline Chinese commands.\n";
+                std::cout<<"For a spoken DeepSeek conversation, launch scripts/voice_chat.py.\n";
 #endif
                 return 0;
             }
             if(key=="--video") {recordVideo=true;continue;}
+            if(key=="--continuous") {continuous=true;continue;}
+#ifdef CONNECT_LAB_VIDEO
+            if(key=="--ring") {useRing=true;continue;}
+            if(key=="--ring-demo") {useRing=true;ringDemo=true;continue;}
+            if(key=="--ring-monitor") {useRing=true;ringOnly=true;continue;}
+            if(key=="--ring-auto-highlight") {ringOptions.enabled=true;continue;}
+#endif
+#ifdef CONNECT_LAB_VOICE
+            if(key=="--voice-chat-input") {voiceChat=true;continue;}
+#endif
             if(key=="--voice-snapshot") {
 #ifdef CONNECT_LAB_VOICE
                 voiceSnapshot=true;
@@ -258,9 +324,43 @@ int main(int argc, char** argv) {
             if(key=="--mode") mode=value;
             else if(key=="--output") output=argument;
             else if(key=="--stop-file") stopFile=argument;
-            else if(key=="--seconds" || key=="--connect-timeout") {
-                int n=std::stoi(value,&used);if(used!=value.size() || n<1 || n>120) throw std::runtime_error("Duration must be 1..120 seconds");
-                (key=="--seconds"?seconds:timeout)=n;
+            else if(key=="--seconds" || key=="--connect-timeout" || key=="--segment-seconds") {
+                const int limit=key=="--connect-timeout"?120:key=="--segment-seconds"?3600:86400;
+                int n=std::stoi(value,&used);
+                if(used!=value.size() || n<1 || n>limit)
+                    throw std::runtime_error(key+" must be 1.."+std::to_string(limit)+" seconds");
+                (key=="--seconds"?seconds:key=="--connect-timeout"?timeout:segmentSeconds)=n;
+#ifdef CONNECT_LAB_VIDEO
+                if(key=="--seconds") fixedDuration=true;
+#endif
+            }
+#ifdef CONNECT_LAB_VIDEO
+            else if(key=="--ring-baseline") {
+                ringTuning=true;
+                if(value=="auto") ringOptions.fixedRange.reset();
+                else {
+                    const auto separator=value.find(':');
+                    const double low=ringNumber(value.substr(0,separator),35,220);
+                    const double high=separator==std::string::npos ? low :
+                        ringNumber(value.substr(separator+1),low,220);
+                    ringOptions.fixedRange={low,high};
+                }
+            } else if(key=="--ring-change-percent") {
+                ringTuning=true;
+                ringOptions.changeFraction=ringNumber(value,1,50)/100;
+            } else if(key=="--ring-hold-seconds" || key=="--ring-calibration-seconds") {
+                ringTuning=true;
+                const int n=std::stoi(value,&used);
+                const bool calibration=key=="--ring-calibration-seconds";
+                if(used!=value.size() || n<(calibration?10:2) || n>(calibration?300:60))
+                    throw std::runtime_error("Invalid value for "+key);
+                (calibration?ringOptions.calibration:ringOptions.hold)=std::chrono::seconds(n);
+            }
+#endif
+            else if(key=="--highlight-button") {
+                highlightButton=std::stoi(value,&used);
+                if(used!=value.size() || highlightButton<0 || highlightButton>8)
+                    throw std::runtime_error("--highlight-button must be 0..8");
             } else if(key=="--vid" || key=="--pid") {
                 auto n=std::stoul(value,&used,0);if(used!=value.size() || n==0 || n>65535) throw std::runtime_error("VID/PID must be 1..65535");
                 (key=="--vid"?vid:pid)=n;
@@ -268,29 +368,68 @@ int main(int argc, char** argv) {
         }
         if(mode!="mic" && mode!="spk" && mode!="both") throw std::runtime_error("Invalid mode");
         if(bool(vid)!=bool(pid)) throw std::runtime_error("Set both --vid and --pid");
+        if(!recordVideo && (continuous || segmentSeconds!=120 || highlightButton>=0 || seconds>120))
+            throw std::runtime_error("Long recording, continuous mode and highlight options require --video");
+#ifdef CONNECT_LAB_VIDEO
+        if(ringOnly && (recordVideo || ringOptions.enabled))
+            throw std::runtime_error("--ring-monitor is a standalone command");
+        if(useRing && !recordVideo && !ringOnly)
+            throw std::runtime_error("Ring overlay requires --video; use --ring-monitor for terminal readings");
+        if((ringOptions.enabled && !(useRing && recordVideo)) || (ringTuning && !ringOptions.enabled))
+            throw std::runtime_error("Ring highlight settings require --video --ring --ring-auto-highlight");
+#endif
 #ifdef CONNECT_LAB_VOICE
         if(voiceSnapshot && (!recordVideo || mode=="spk"))
             throw std::runtime_error("--voice-snapshot requires --video and microphone audio");
+        if(voiceChat && (recordVideo || voiceSnapshot || mode!="mic" ||
+            GetFileType(GetStdHandle(STD_INPUT_HANDLE))!=FILE_TYPE_PIPE))
+            throw std::runtime_error("Use scripts/voice_chat.py for standalone microphone conversation");
 #endif
 #ifndef CONNECT_LAB_VIDEO
         if(recordVideo) throw std::runtime_error("--video is available only in the Windows hardware build");
 #endif
     } catch(const std::exception& e) {log(e.what());return 2;}
     std::signal(SIGINT,signalHandler);
+#ifdef CONNECT_LAB_VIDEO
+    if(ringOnly) {
+        try {
+            log("Reading PPG pulse; Ctrl+C stops monitoring");
+            ring::Monitor monitor(ringDemo, {}, [](ring::Reading) {}, [](ring::Episode) {});
+            const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(seconds);
+            while(!interrupted && (!fixedDuration || std::chrono::steady_clock::now()<end))
+                std::this_thread::sleep_for(100ms);
+            return 0;
+        } catch(const std::exception& e) {log(e.what());return 2;}
+    }
+#endif
     Context c;
+#ifdef CONNECT_LAB_VIDEO
+    std::unique_ptr<ring::Monitor> ringMonitor;
+#endif
+#ifdef CONNECT_LAB_VOICE
+    c.voiceChat=voiceChat;
+#endif
     // Unique session directory; never silently overwrite an earlier recording.
     auto stamp=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     c.directory=output/("session-"+std::to_string(stamp));
     try {
-        if(!std::filesystem::create_directories(c.directory)) throw std::runtime_error("Session directory already exists");
+#ifdef CONNECT_LAB_VOICE
+        if(!voiceChat)
+#endif
+        {
+            if(!std::filesystem::create_directories(c.directory)) throw std::runtime_error("Session directory already exists");
+        }
 #ifdef CONNECT_LAB_VIDEO
-        if(recordVideo) c.video=std::make_unique<VideoCapture>(c.directory);
+        if(recordVideo)
+            c.video=std::make_unique<VideoCapture>(c.directory,mode!="spk",segmentSeconds,useRing,ringDemo);
+        c.highlightButton=highlightButton;
 #endif
 #ifdef CONNECT_LAB_VOICE
-        if(voiceSnapshot) {
+        if(voiceSnapshot || voiceChat) {
             log("Loading local voice recognition model");
-            c.voice=std::make_unique<VoiceSnapshot>(*c.video,
-                +[](const std::string& message) { log(message); });
+            const auto voiceLog=+[](const std::string& message) { log(message); };
+            c.voice=voiceChat ? std::make_unique<VoiceSnapshot>(voiceLog)
+                              : std::make_unique<VoiceSnapshot>(*c.video,voiceLog);
             c.voice->start();
         }
 #endif
@@ -334,43 +473,72 @@ int main(int argc, char** argv) {
         if(stopRequested(stopFile)) throw std::runtime_error("Recording cancelled before start");
         queryPcVolume(sdk,c);
 #ifdef CONNECT_LAB_VIDEO
-        if(c.video && !interrupted) c.video->open(sdk);
+        if(c.video && !stopRequested(stopFile)) c.video->open(sdk);
 #endif
         if(stopRequested(stopFile)) throw std::runtime_error("Recording cancelled before start");
         startAttempted=true;
         if(!recordingCommand(sdk,c,mode,false)) throw std::runtime_error("Recording start not confirmed");
-        c.acceptAudio=true;
 #ifdef CONNECT_LAB_VIDEO
         if(c.video) {
             c.video->start();
-            log("Video recording active; press S to save a snapshot");
+            log("Video recording active; press S for a snapshot or H for a highlight");
+            if(useRing) {
+                auto* video=c.video.get();
+                ringMonitor=std::make_unique<ring::Monitor>(ringDemo,ringOptions,
+                    [video](ring::Reading reading) { video->ringReading(reading); },
+                    [video](ring::Episode episode) {
+                        if(!video->requestRingHighlight(episode)) log("RING_HIGHLIGHT_UNAVAILABLE");
+                    });
+            }
         }
 #endif
 #ifdef CONNECT_LAB_VOICE
-        if(c.voice) log("Voice snapshots active; say 拍照, 照相, or 拍张照片, then pause");
+        if(voiceChat) log("VOICE_CHAT_READY");
+        else if(c.voice) log("Voice commands active; say 拍张照片 or 保存精彩片段, then pause");
 #endif
+        c.acceptAudio=true;
         log("Recording active; Ctrl+C stops early");
         auto end=std::chrono::steady_clock::now()+std::chrono::seconds(seconds);
         auto next=std::chrono::steady_clock::now()+1s;
-        while(std::chrono::steady_clock::now()<end && !stopRequested(stopFile) && !c.ioFailed) {
+        while(!stopRequested(stopFile) && !c.ioFailed) {
+#ifdef CONNECT_LAB_VOICE
+            if(voiceChat) {
+                const HANDLE input=GetStdHandle(STD_INPUT_HANDLE);
+                DWORD available=0, received=0;
+                char command=0;
+                if(!PeekNamedPipe(input,nullptr,0,nullptr,&available,nullptr) ||
+                    (available && (!ReadFile(input,&command,1,&received,nullptr) || command=='Q'))) break;
+                if(command=='R') c.voice->resume();
+            } else
+#endif
+            if(!continuous && std::chrono::steady_clock::now()>=end) break;
             if(c.state!=VIAIM_CONNECT_CONNECTION_CONNECTED || !c.acceptAudio)
                 throw std::runtime_error("Device disconnected; recording is incomplete");
 #ifdef CONNECT_LAB_VIDEO
+            if(c.video && c.video->failed()) throw std::runtime_error("Video capture stopped working");
             if(c.video && _kbhit()) {
                 const int key=_getch();
                 if(key==0 || key==224) (void)_getch();
                 else if(key=='s' || key=='S')
                     log(c.video->requestSnapshot()?"SNAPSHOT_REQUESTED":"SNAPSHOT_UNAVAILABLE");
+                else if(key=='h' || key=='H') {
+                    if(!c.video->requestHighlight()) log("HIGHLIGHT_UNAVAILABLE");
+                }
             }
 #endif
             if(std::chrono::steady_clock::now()>=next) {
-                log("MIC_BYTES="+std::to_string(c.micBytes)+" SPK_BYTES="+std::to_string(c.spkBytes));next+=1s;
+#ifdef CONNECT_LAB_VOICE
+                if(!voiceChat)
+#endif
+                    log("MIC_BYTES="+std::to_string(c.micBytes)+" SPK_BYTES="+std::to_string(c.spkBytes));
+                next+=1s;
             }
             std::this_thread::sleep_for(50ms);
         }
         recorded=!c.ioFailed;
     } catch(const std::exception& e) {log(std::string("LAB_ERROR: ")+e.what());}
 #ifdef CONNECT_LAB_VIDEO
+    if(ringMonitor) ringMonitor->stop();
     if(c.video) c.video->stop();
 #endif
 #ifdef CONNECT_LAB_VOICE
@@ -386,13 +554,16 @@ int main(int argc, char** argv) {
     {std::lock_guard<std::mutex> lock(c.mutex);c.quitWriter=true;}c.cv.notify_all();writer.join();
     bool videoOk=true;
 #ifdef CONNECT_LAB_VIDEO
-    if(c.video) videoOk=c.video->finish(c.directory/(mode=="spk"?"spk.wav":"mic.wav"));
+    if(c.video) videoOk=c.video->finish();
 #endif
     log("CLEANUP camera="+std::to_string(cameraResult)+" close="+std::to_string(closeResult)+" destroy="+std::to_string(destroyResult));
     log("MIC_BYTES="+std::to_string(c.micBytes)+" SPK_BYTES="+std::to_string(c.spkBytes)+
         " DROPPED="+std::to_string(c.dropped)+" REJECTED="+std::to_string(c.rejected));
     log(recordingSummary(c.micBytes));
-    log("OUTPUT="+utf8Path(c.directory));
+#ifdef CONNECT_LAB_VOICE
+    if(!voiceChat)
+#endif
+        log("OUTPUT="+utf8Path(c.directory));
     bool hasAudio=(mode=="mic"?c.micBytes>0:mode=="spk"?c.spkBytes>0:c.micBytes>0 && c.spkBytes>0);
     bool ok=recorded && stopConfirmed && hasAudio && !c.ioFailed && c.dropped==0 && c.rejected==0 &&
         cameraResult==VIAIM_CONNECT_OK && closeResult==VIAIM_CONNECT_OK && destroyResult==VIAIM_CONNECT_OK && videoOk;

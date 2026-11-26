@@ -42,6 +42,90 @@ WAV 为 16000 Hz、单声道、16-bit。双击 mic.wav 在本地播放器回听�
 示例值是 Windows SDK 默认值，不能保证适用于全部型号。不要照抄 macOS SDK 的设备 ID 或头文件。
 一台电脑只接一台目标 Connect。设备未响应、无 PCM、只有排队成功或只有一条响应，都不能记为通过。
 
+## 可选语音功能
+
+使用 Windows x64 的 Python 3.12–3.14 下载 Kokoro 播报模型、SenseVoice 识别模型及
+Sherpa-ONNX 运行时。脚本从官方发布页下载固定版本并校验 SHA-256，写入被 Git 忽略的
+`build-student`。在项目目录执行：
+
+```powershell
+python -B .\scripts\download_voice_models.py
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1
+```
+
+构建需要终端可以找到 `cmake` 和 `ctest`。如果以前配置过不同的模型路径，可把
+`CONNECT_VOICE_MODEL_DIR` 环境变量设为下载后的 SenseVoice 文件夹。
+
+语音对话需要在 `scripts/deepseek.local.toml` 中填入 `api_key = "你的 Key"`，或在当前终端
+设置 `DEEPSEEK_API_KEY`。配置文件已被 Git 忽略。把 Connect 设为 Windows 默认声音输出，
+用安装依赖时的同一个 Python 运行：
+
+```powershell
+python -B -X utf8 .\scripts\voice_chat.py
+```
+
+录像需要 FFmpeg 在 `PATH` 中。录像时按 `S` 可以保存截图，启用语音抓拍后也可说「拍张照片」：
+
+```powershell
+.\build-student\Release\connect_lab.exe --video --voice-snapshot --mode mic --seconds 30
+```
+
+### 长录像与精彩片段
+
+```powershell
+.\build-student\Release\connect_lab.exe --video --continuous --mode mic --voice-snapshot
+```
+
+在录像终端按 `H`，或说「保存精彩片段」「保存这段视频」后稍停，会标记前后各 20 秒。
+片段准备好后，终端显示 `CLIP_SAVED=highlight-1.mp4`。开头或提前结束时，保存实际录到的部分。
+保留 `S` 截图。若要用音箱实体键，先看按键日志中的 `DEVICE_KEY` 和 `ACTION`，
+确认选中的键会上报单击（`ACTION=2`），并确认它的原生动作适合录像，再用
+`--highlight-button N` 绑定。
+
+电脑端每 120 秒写出一个带音频的 `segments/segment-N.mp4`，切段时音箱继续采集。
+按 `Ctrl+C` 停止并等待本次会话输出完整的 `video.mp4`。可用 `--seconds 180` 替代
+`--continuous` 定时结束；`--segment-seconds N` 可调整分段长度。视频和精彩片段在
+`both` 模式使用麦克风轨，`spk` 模式使用扬声器轨。
+
+## 智能戒指心率与精彩片段
+
+启动 `BioScopeAPI.exe`，通过其 `/connect` 接口连接戒指 `BCL603M5`（`device_type = 'ppg'`），确认状态为 `streaming`。Connect 在后台每秒从本机 BioScope 读取 `GREEN` PPG，使用最近约 5–7 秒的波形估算心率。终端显示 `RING_BPM`，视频左下角显示随估算心率跳动的心形和 BPM 数字。
+
+- 如果脉搏峰间隔不够规律，程序用自相关检查整窗和最近约 4 秒的波形。如果两段波形仍支持近期已验证的脉搏周期，还可以在压低尖峰影响后进行补估。新补估值显示为心率数字，并在终端打印 `RING_RECOVERED_BPM`。
+- 样本仍在更新但暂时无法估计新心率时，视频先用 `HOLD` 标记显示上一次读数约 3 秒。超过保持期、数据停更或断开后，显示 `LAST` 和距上次估算的秒数。首次得到读数前，或戒指采集会话切换时，显示 `WAIT`，直到新会话产生读数。基线和自动片段继续使用通过峰值检查的新估算。
+
+只看终端读数（无需连接音箱，Ctrl+C 停止）：
+
+```powershell
+.\build-student\Release\connect_lab.exe --ring-monitor
+```
+
+录音录像并显示心率：
+
+```powershell
+.\build-student\Release\connect_lab.exe --video --continuous --mode mic --voice-snapshot --ring
+```
+
+用固定个人基线开启自动片段：
+
+```powershell
+.\build-student\Release\connect_lab.exe --video --continuous --mode mic --voice-snapshot --ring --ring-auto-highlight --ring-baseline 90
+```
+
+- `--ring-baseline auto` 为自动片段模式的默认值。开始时静坐，等 `RING_BASELINE` 打印数值。程序用连续 30 秒稳定读数的中位数作为本次戒指会话基线。可用 `--ring-calibration-seconds` 修改校准时长。
+- `--ring-baseline 90` 将基线设为 90 BPM，默认达到 108 BPM 或降到 72 BPM 开始计时。也可用 `--ring-baseline 70:80` 指定区间，此例在达到 96 BPM 或降到 56 BPM 时开始计时。
+- 偏离达到基线边界的 20% 并持续至少 6 秒，终端打印 `RING_HIGHLIGHT_TRIGGERED`。可用 `--ring-change-percent` 和 `--ring-hold-seconds` 调整。连续 3 秒回落到恢复阈值内后结束事件。恢复阈值使用配置偏离量的 80%，减少边缘抖动。
+- 自动片段名为 `highlight-ring-*.mp4`，包含事件起点前约 20 秒、整个事件及结束后约 20 秒。持续超过 60 秒的事件分段保存，停止录像时会导出已确认事件的已有部分。检测基于滚动估计，片段边界对应估计心率变化的时刻。
+- `H`、设备按键和语音精彩片段仍然可用。整段视频、分段视频和精彩片段都使用叠加后的画面。
+
+带 `DEMO` 水印的演示输入（无需戒指，正式版仍使用真实摄像头和音频）：
+
+```powershell
+.\build-student\Release\connect_lab.exe --video --seconds 40 --mode mic --ring-demo --ring-auto-highlight --ring-baseline 75
+```
+
+当前功能用于记录脉搏变化与对应视频。BPM 取自光学 PPG，运动干扰会影响读数。医疗监护与诊断需要经过相应验证的设备。
+
 ## 学生任务
 
 src/LessonTask.h 的 recordingSummary 是可运行占位实现。只修改它，输出
