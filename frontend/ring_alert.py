@@ -105,7 +105,7 @@ def save_result(directory, result, on_line):
             on_line(line)
 
 
-def analyze_event(marker, client, notified, cancel, *, stop_alarm=None, on_line=None):
+def analyze_event(marker, client, notified, cancel, *, analyze_demo=False, stop_alarm=None, on_line=None):
     result = {"verdict": "pending", "summary": "", "analysis_state": "queued",
               "alarm_state": "pending", "alarm_played": False}
 
@@ -128,7 +128,9 @@ def analyze_event(marker, client, notified, cancel, *, stop_alarm=None, on_line=
         episode = event["episode"]
         result.update(episode=episode, batch=event.get("batch"))
         if event["demo"]:
-            return skipped("demo", "模拟心率，本轮图片保留在本机。", "demo")
+            if not analyze_demo:
+                return skipped("demo", "模拟心率，本轮图片保留在本机。", "demo")
+            result.update(analyze_demo=True, alarm_state="skipped", alarm_reason="demo")
         if episode in notified:
             return skipped("already_alerted", "同一次心率预警已播放过警报声。", "already_alerted")
         if event["status"] == "failed":
@@ -153,6 +155,8 @@ def analyze_event(marker, client, notified, cancel, *, stop_alarm=None, on_line=
     if assessment.verdict != "suspected_fall":
         reason = "no_fall" if assessment.verdict == "no_visible_fall" else "uncertain"
         return {**result, "alarm_state": "skipped", "alarm_reason": reason}
+    if event["demo"]:
+        return result
     if cancel.is_set() or (stop_alarm is not None and stop_alarm.is_set()):
         return {**result, "alarm_state": "skipped", "alarm_reason": "stopped"}
     print(f"RING_ALERT_POSSIBLE_FALL episode={episode} 疑似摔倒或倒下，请立即查看。", flush=True)
@@ -171,7 +175,7 @@ def analyze_event(marker, client, notified, cancel, *, stop_alarm=None, on_line=
     return result
 
 
-def watch_events(root, client, finished, cancel, *, stop_alarm=None, on_line=None):
+def watch_events(root, client, finished, cancel, *, analyze_demo=False, stop_alarm=None, on_line=None):
     handled = set()
     notified = set()
     while not cancel.is_set():
@@ -191,7 +195,8 @@ def watch_events(root, client, finished, cancel, *, stop_alarm=None, on_line=Non
             if cancel.is_set():
                 return
             handled.add(marker)
-            result = analyze_event(marker, client, notified, cancel, stop_alarm=stop_alarm, on_line=on_line)
+            result = analyze_event(marker, client, notified, cancel, analyze_demo=analyze_demo,
+                                   stop_alarm=stop_alarm, on_line=on_line)
             verdict = result["verdict"]
             print(f"RING_ALERT_RESULT={verdict} event={marker.parent.name} alarm={result['alarm_played']} "
                   f"analysis={result['analysis_state']} alarm_state={result['alarm_state']} "
@@ -226,7 +231,8 @@ def relay_output(stream, output, roots, on_line=None, on_root=None):
             roots.put(None)
 
 
-def run_recorder(executable, output, options, client, *, cancel=None, shutdown=None, on_line=None, on_root=None):
+def run_recorder(executable, output, options, client, *, analyze_demo=False, cancel=None, shutdown=None,
+                 on_line=None, on_root=None):
     finished = Event()
     controlled = cancel is not None
     if cancel is None:
@@ -238,7 +244,8 @@ def run_recorder(executable, output, options, client, *, cancel=None, shutdown=N
     def monitor():
         root = roots.get()
         if root is not None:
-            watch_events(root, client, finished, shutdown, stop_alarm=cancel, on_line=on_line)
+            watch_events(root, client, finished, shutdown, analyze_demo=analyze_demo,
+                         stop_alarm=cancel, on_line=on_line)
 
     with TemporaryDirectory(prefix="connect-ring-alert-") as directory:
         stop_file = Path(directory) / "stop"

@@ -193,6 +193,12 @@
                   placeholder="例如 75 或 65:85" aria-describedby="ring-baseline-help" disabled>
                 <p id="ring-baseline-help" class="ring-help">输入 35–220 BPM 内的单值或范围。</p>
               </div>
+              <div id="ring-demo-analysis-option" class="ring-demo-analysis" hidden>
+                <label class="ring-check">
+                  <input id="ring-demo-analysis" type="checkbox" aria-describedby="ring-start-help" disabled>
+                  用 DeepSeek 分析模拟预警
+                </label>
+              </div>
               <p class="ring-help" id="ring-start-help">启动 BioScope 并连接戒指。确认心率预警后会抽帧分析，画面支持疑似跌倒时才会响铃。</p>
               <div class="ring-actions">
                 <button id="ring-start" type="submit" class="primary-button" disabled>开始监测</button>

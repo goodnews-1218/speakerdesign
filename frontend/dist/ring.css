@@ -347,6 +347,11 @@
   accent-color: var(--green);
 }
 
+.ring-demo-analysis .ring-check {
+  min-height: 2rem;
+  white-space: normal;
+}
+
 .ring-help,
 .ring-footnote {
   color: var(--ring-secondary);

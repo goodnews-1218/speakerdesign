@@ -117,10 +117,11 @@ def list_events(session, active):
             if match:
                 directories.append((int(match[1]), int(match[2]), entry.name))
     except OSError:
-        return [], 0, False
+        return [], 0, False, False
     events = {}
     episodes = set()
     demo = False
+    analyze_demo = False
     for episode, _, event_id in sorted(directories, key=lambda item: (-item[0], item[1])):
         relative = f"fall-alerts/{event_id}"
         marker = regular_file(session, f"{relative}/ready")
@@ -139,6 +140,7 @@ def list_events(session, active):
         result = read_json_file(result_path) if result_path else {}
         if result is None:
             result = {"verdict": "error", "summary": "分析结果暂时无法读取。"}
+        analyze_demo = analyze_demo or (job["demo"] and result.get("analyze_demo") is True)
         capture = job["status"]
         summary = result.get("summary", "")
         verdict = result.get("verdict")
@@ -175,7 +177,7 @@ def list_events(session, active):
         event["frames"] = [frame for _, frame in sorted(event["frames"].items())]
         if event["alarm_played"]:
             event.update(alarm_state="played", alarm_reason=None)
-    return list(events.values()), len(episodes), demo
+    return list(events.values()), len(episodes), demo, analyze_demo
 
 
 def list_videos(session):
@@ -213,6 +215,7 @@ class RingMonitorSession:
         self.pulse_state = None
         self.warning_count = 0
         self.demo = False
+        self.analyze_demo = False
         self.error = None
         self.capture_error = None
         self.result_save_errors = set()
@@ -237,17 +240,20 @@ class RingMonitorSession:
             save_errors = self.result_save_errors.copy()
             reply = {"state": self.state, "bpm": self.bpm, "baseline": self.baseline,
                      "pulse_state": self.pulse_state, "warning_count": self.warning_count,
-                     "demo": self.demo, "error": self.error, "capture_error": self.capture_error,
+                     "demo": self.demo, "analyze_demo": self.analyze_demo,
+                     "error": self.error, "capture_error": self.capture_error,
                      "session": session.name if session else None,
                      "preview_url": None, "events": [], "videos": []}
         if session:
-            reply["events"], saved_warnings, saved_demo = list_events(session, reply["state"] in ACTIVE_STATES)
+            events, saved_warnings, saved_demo, saved_analyze_demo = list_events(session, reply["state"] in ACTIVE_STATES)
+            reply["events"] = events
             saved_results = {batch["id"] for item in reply["events"] for batch in item["batches"]
                              if batch["verdict"] not in ("pending", "cancelled") and batch["alarm_state"] != "playing"}
             if not reply["error"] and save_errors - saved_results:
                 reply["error"] = "部分预警结果未能写入录像目录。请查看启动窗口中的 RING_ALERT_RESULT。"
             reply["warning_count"] = max(reply["warning_count"], saved_warnings)
             reply["demo"] = reply["demo"] or saved_demo
+            reply["analyze_demo"] = reply["analyze_demo"] or saved_analyze_demo
             reply["videos"] = list_videos(session)
             preview = regular_file(session, PREVIEW)
             if preview and reply["state"] == "running":
@@ -284,8 +290,11 @@ class RingMonitorSession:
     def start(self, payload):
         baseline = validate_baseline(payload.get("baseline", "auto"))
         demo = payload.get("demo", False)
+        analyze_demo = payload.get("analyze_demo", False)
         if type(demo) is not bool:
             raise APIError("演示模式设置无效。", 400)
+        if type(analyze_demo) is not bool or (analyze_demo and not demo):
+            raise APIError("请开启模拟心率后再启用模拟预警分析。", 400)
         with self.lock:
             if self.closed:
                 raise APIError("服务正在关闭，请重新启动。", 503)
@@ -295,7 +304,7 @@ class RingMonitorSession:
                 raise APIError("找不到 Connect 录像程序，请先编译 Windows Release 版。", 503)
             if not shutil.which("ffmpeg"):
                 raise APIError("录像需要 FFmpeg。请确认 ffmpeg -version 能在终端运行，随后重启本地页面服务。", 503)
-            if not demo:
+            if not demo or analyze_demo:
                 self.client.require_key()
             if not self.device_lock.acquire(blocking=False):
                 raise APIError("Connect 正在录音或拍照，请等当前操作结束后再启动监测。", 409)
@@ -304,12 +313,13 @@ class RingMonitorSession:
                 self.cancel = Event()
                 self.session = None
                 self.state, self.demo = "starting", demo
+                self.analyze_demo = analyze_demo
                 self.bpm, self.warning_count, self.error = None, 0, None
                 self.capture_error = None
                 self.result_save_errors.clear()
                 self.baseline = display_baseline(baseline.replace(":", ".."))
                 self.pulse_state = None
-                self.thread = Thread(target=self.run, args=(baseline, demo, self.cancel), daemon=True)
+                self.thread = Thread(target=self.run, args=(baseline, demo, analyze_demo, self.cancel), daemon=True)
                 self.thread.start()
             except (OSError, RuntimeError) as error:
                 self.device_lock.release()
@@ -317,7 +327,7 @@ class RingMonitorSession:
                 raise APIError(self.error, 503) from error
         return self.status()
 
-    def run(self, baseline, demo, cancel):
+    def run(self, baseline, demo, analyze_demo, cancel):
         options = ["--ring-baseline", baseline, "--fall-alert-preview", *self.device_args]
         if demo:
             options.append("--ring-demo")
@@ -325,7 +335,7 @@ class RingMonitorSession:
         status = None
         try:
             status = run_recorder(self.executable, self.recordings, options, self.client,
-                                  cancel=cancel, shutdown=self.shutdown,
+                                  analyze_demo=analyze_demo, cancel=cancel, shutdown=self.shutdown,
                                   on_line=self.on_line, on_root=self.on_root)
         except (OSError, RuntimeError) as failure:
             print(f"RING_WEB_ERROR={type(failure).__name__}", flush=True)

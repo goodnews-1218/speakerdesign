@@ -5,6 +5,7 @@
   const panel = $('ring-monitor');
   const form = $('ring-form');
   const demo = $('ring-demo-input');
+  const analyzeDemo = $('ring-demo-analysis');
   const baselineMode = $('ring-baseline-mode');
   const baselineInput = $('ring-baseline-input');
   const preview = $('ring-preview');
@@ -125,6 +126,15 @@
     baselineInput.disabled = locked || !manual;
     baselineInput.required = manual;
     demo.disabled = locked;
+    $('ring-demo-analysis-option').hidden = !demo.checked;
+    analyzeDemo.disabled = locked || !demo.checked;
+    const help = !demo.checked
+      ? '启动 BioScope 并连接戒指。确认心率预警后会抽帧分析，画面支持疑似跌倒时才会响铃。'
+      : analyzeDemo.checked
+        ? '模拟预警时会将音箱摄像头的实际抽帧发送给 DeepSeek。模拟心率不会自动响铃。'
+        : '抽帧会保存在本机。勾选上方选项可将摄像头抽帧发送给 DeepSeek。';
+    const helpNode = $('ring-start-help');
+    if (helpNode.textContent !== help) helpNode.textContent = help;
     const message = actionError || connectionError || status?.error || '';
     const messageNode = $('ring-status-message');
     if (messageNode.textContent !== message) messageNode.textContent = message;
@@ -170,7 +180,7 @@
       trigger = ['无法读取本机监测状态', 'error'];
       capture = analysis = alarm = ['状态暂不可用'];
     } else if (waitingForFrames) {
-      trigger = ['已确认心率预警', 'warning'];
+      trigger = [data.demo ? '已确认模拟预警' : '已确认心率预警', 'warning'];
       capture = data.capture_error ? ['抽帧出错', 'error']
         : isActive(data.state) ? ['正在准备预警画面', 'warning'] : ['暂无已保存画面', 'warning'];
       if (collecting && !data.capture_error) alarm = ['等待抽帧和分析', 'warning'];
@@ -178,7 +188,8 @@
     } else if (latest) {
       const stages = eventStages(latest);
       const lastBatch = latest.batches?.at(-1);
-      trigger = [episode ? `第 ${episode} 次心率预警` : '已确认心率预警', 'warning'];
+      const warning = data.demo ? '模拟预警' : '心率预警';
+      trigger = [episode ? `第 ${episode} 次${warning}` : `已确认${warning}`, 'warning'];
       capture = stages.capture;
       analysis = ['queued', 'requesting'].includes(lastBatch?.analysis_state)
         ? eventStages(lastBatch).analysis : stages.analysis;
@@ -199,8 +210,9 @@
       trigger = ['本轮未确认心率预警'];
     }
     if (data?.demo) {
-      analysis = ['模拟心率，画面保存在本机'];
-      alarm = ['模拟心率，未自动播放'];
+      if (!data.analyze_demo) analysis = ['模拟心率，画面保存在本机'];
+      else if ((!latest || waitingForFrames) && isActive(data.state)) analysis = ['已开启，等待预警画面'];
+      alarm = ['模拟心率，不自动响铃'];
     }
     if (connectionError && data) trigger = ['连接中断，显示最后一次状态', 'error'];
     setDiagnostic('ring-trigger-state', trigger);
@@ -446,7 +458,14 @@
     }
     status = data;
     renderState(data.state);
-    $('ring-demo-badge').hidden = !data.demo || !(data.session || isActive(data.state));
+    const active = isActive(data.state);
+    const demoBadge = $('ring-demo-badge');
+    demoBadge.hidden = !data.demo || !(data.session || active);
+    demoBadge.textContent = data.analyze_demo ? '模拟心率 · DeepSeek' : '模拟心率';
+    if (active) {
+      demo.checked = data.demo === true;
+      analyzeDemo.checked = data.demo === true && data.analyze_demo === true;
+    }
     const hasReading = Number.isFinite(data.bpm) && data.bpm > 0;
     $('ring-bpm').textContent = hasReading ? String(Math.round(data.bpm)) : '—';
     $('ring-pulse-label').textContent = isActive(data.state) ? (
@@ -575,7 +594,7 @@
       baselineInput.reportValidity();
       return;
     }
-    performAction('start', { baseline, demo: demo.checked });
+    performAction('start', { baseline, demo: demo.checked, analyze_demo: demo.checked && analyzeDemo.checked });
   });
   baselineMode.addEventListener('change', () => {
     baselineInput.setCustomValidity('');
@@ -584,10 +603,10 @@
   });
   baselineInput.addEventListener('input', () => baselineInput.setCustomValidity(''));
   demo.addEventListener('change', () => {
-    $('ring-start-help').textContent = demo.checked
-      ? '模拟心率只在本机保存抽帧，不提交 DeepSeek，也不自动发出警报声。'
-      : '启动 BioScope 并连接戒指。确认心率预警后会抽帧分析，画面支持疑似跌倒时才会响铃。';
+    if (!demo.checked) analyzeDemo.checked = false;
+    updateControls();
   });
+  analyzeDemo.addEventListener('change', updateControls);
   $('ring-stop').addEventListener('click', () => performAction('stop', {}));
   $('ring-test-alarm').addEventListener('click', testAlarm);
   $('ring-view-events').addEventListener('click', () => {

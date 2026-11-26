@@ -24,10 +24,10 @@ class RingWebStatusTests(unittest.TestCase):
         return RingMonitorSession(self.recordings / "connect_lab.exe", [], self.recordings,
                                   Mock(), self.device_lock, Mock())
 
-    def event(self, result=None, capture="ready", *, batch=1, times=()):
+    def event(self, result=None, capture="ready", *, batch=1, times=(), demo=False):
         event = self.recordings / "session-200" / "fall-alerts" / f"event-1-{batch}"
         event.mkdir(parents=True, exist_ok=True)
-        (event / "ready").write_text(json.dumps({"version": 1, "demo": False, "episode": 1, "batch": batch,
+        (event / "ready").write_text(json.dumps({"version": 1, "demo": demo, "episode": 1, "batch": batch,
                                                "status": capture, "times_ms": times}), encoding="utf-8")
         if result is not None:
             (event / "analysis.json").write_text(json.dumps(result), encoding="utf-8")
@@ -60,6 +60,39 @@ class RingWebStatusTests(unittest.TestCase):
         item = self.app().status()["events"][0]
         self.assertEqual((item["analysis_state"], item["alarm_state"], item["alarm_played"]),
                          ("received", "failed", False))
+
+    def test_archived_demo_analysis_keeps_the_model_result(self):
+        self.event({"verdict": "suspected_fall", "analysis_state": "received", "alarm_state": "skipped",
+                    "alarm_reason": "demo", "analyze_demo": True}, demo=True)
+        status = self.app().status()
+        self.assertTrue(status["demo"])
+        self.assertTrue(status["analyze_demo"])
+        self.assertEqual(status["events"][0]["analysis_state"], "received")
+
+    @patch("ring_web.shutil.which", return_value="ffmpeg")
+    @patch("ring_web.run_recorder", return_value=0)
+    def test_demo_analysis_requires_key_and_keeps_native_demo_flag(self, run_recorder, _):
+        app = self.app()
+        self.addCleanup(app.close)
+        app.executable.touch()
+
+        app.start({"demo": True})
+        app.thread.join(timeout=2)
+        app.client.require_key.assert_not_called()
+        self.assertFalse(run_recorder.call_args.kwargs["analyze_demo"])
+
+        with self.assertRaises(APIError):
+            app.start({"demo": False, "analyze_demo": True})
+        app.client.require_key.side_effect = APIError("Missing key", 503)
+        with self.assertRaises(APIError):
+            app.start({"demo": True, "analyze_demo": True})
+        self.assertEqual(run_recorder.call_count, 1)
+
+        app.client.require_key.side_effect = None
+        self.assertTrue(app.start({"demo": True, "analyze_demo": True})["analyze_demo"])
+        app.thread.join(timeout=2)
+        self.assertIn("--ring-demo", run_recorder.call_args.args[2])
+        self.assertTrue(run_recorder.call_args.kwargs["analyze_demo"])
 
     def test_episode_groups_frames_while_retaining_each_batch_status(self):
         self.event({"verdict": "suspected_fall", "summary": "Visible fall", "analysis_state": "received",

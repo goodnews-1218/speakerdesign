@@ -71,11 +71,11 @@ class RingAlertTests(unittest.TestCase):
             (directory / "ready.tmp").replace(directory / "ready")
         return directory
 
-    def consume(self):
+    def consume(self, *, analyze_demo=False):
         finished = Event()
         finished.set()
         with patch.object(ring_alert, "winsound", self.sound), redirect_stdout(io.StringIO()):
-            ring_alert.watch_events(self.root, self.client, finished, Event())
+            ring_alert.watch_events(self.root, self.client, finished, Event(), analyze_demo=analyze_demo)
 
     @staticmethod
     def result(directory):
@@ -128,6 +128,34 @@ class RingAlertTests(unittest.TestCase):
         self.assertTrue(all(self.result(event)["analysis_state"] == "skipped"
                             for event in (demo, incomplete, duplicates)))
         self.client.complete.assert_not_called()
+        self.sound.PlaySound.assert_not_called()
+
+    def test_demo_opt_in_analyzes_camera_frames_without_playing_alarm(self):
+        event = self.make_event(1, demo=True)
+        incomplete = self.make_event(2, demo=True, status="insufficient", photos=())
+
+        def complete(*_, **__):
+            pending = self.result(event)
+            self.assertTrue(pending["analyze_demo"])
+            self.assertEqual((pending["analysis_state"], pending["alarm_state"]), ("requesting", "skipped"))
+            return json.dumps(suspected_fall_response())
+
+        self.client.complete.side_effect = complete
+        self.consume(analyze_demo=True)
+
+        self.client.complete.assert_called_once()
+        content = self.client.complete.call_args.args[0][1]["content"]
+        photos = [base64.b64decode(item["image_url"]["url"].split(",", 1)[1])
+                  for item in content if item["type"] == "image_url"]
+        self.assertEqual(photos, list(PHOTOS))
+        result = self.result(event)
+        self.assertEqual((result["verdict"], result["analysis_state"]), ("suspected_fall", "received"))
+        self.assertEqual((result["alarm_state"], result["alarm_reason"]), ("skipped", "demo"))
+        self.assertTrue(result["analyze_demo"])
+        self.assertFalse(result["alarm_played"])
+        skipped = self.result(incomplete)
+        self.assertTrue(skipped["analyze_demo"])
+        self.assertEqual(skipped["analysis_state"], "skipped")
         self.sound.PlaySound.assert_not_called()
 
     def test_bad_marker_and_upstream_error_do_not_play_alarm(self):
