@@ -1,6 +1,12 @@
 # 声境 Connect 本地前端
 
-不需要安装前端依赖。双击 `start.cmd` 会启动服务并打开默认浏览器，或在仓库根目录执行：
+不需要安装前端依赖。实际操作音箱前，在项目根目录编译 Windows x64 Release：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1
+```
+
+构建会生成 `build-student/Release/connect_lab.exe` 和 `connect_frame.exe`。程序旁需要保留构建复制的厂商 DLL 和描述 JSON。双击 `start.cmd` 会启动本地服务并打开默认浏览器，也可以在仓库根目录执行：
 
 ```powershell
 python frontend/serve.py
@@ -8,28 +14,44 @@ python frontend/serve.py
 
 在 Edge 或 Chrome 中打开 <http://127.0.0.1:4173>。停止时在启动窗口按 Ctrl+C。端口被占用时可运行 `python frontend/serve.py --port 4174`。
 
+## 用语音描述眼前画面
+
+1. 打开 `frontend/deepseek.env`，将 DeepSeek 开放平台创建的 **API Key** 填在 `DEEPSEEK_API_KEY=` 的等号后。如果这个文件不存在，复制 `deepseek.env.example` 到同目录并改名为 `deepseek.env`。文件已加入 Git 忽略规则。也支持通过本机环境变量设置同名项。
+2. 用 USB 连接 Connect，打开镜头盖。在 Windows「设置 → 系统 → 声音 → 输出」选择该音箱，并先用系统测试音确认能播出。
+3. 打开页面的「连接设置」，选择「音箱服务」，电脑端服务地址留空。点「开始语音输入」。听到屏幕阅读器提示可以说话后，说「描述一下你看到的画面」，再点「结束语音输入」。也可以直接等约 12 秒自动结束。
+4. 识别到指令后，电脑端会抓取一张新的照片，把照片和指令发送给 DeepSeek。回答在页面上显示，电脑会通过 Windows 默认输出设备播报。
+
+也可直接在页面输入「描述一下你看到的画面」再发送，或点「描述当前画面」。没有连接音箱时，可切换到「电脑麦克风」模式，手动开启电脑摄像头预览，再用文字或按钮测试拍照描述。拍照会发送当前照片，录音转写会发送这轮音频。用于了解静态画面，过街和避障需要其他可靠方式。
+
+如果设备用不同的 USB 硬件 ID，可通过 `python frontend/serve.py --vid 0x2207 --pid 0x0017` 同时覆盖两个值。示例为 SDK 默认值，实际以设备管理器识别的设备为准。若系统输出列表中找不到这台音箱，需要厂商确认 Windows 播放驱动或提供音频播放接口。
+
 ## 已实现
 
 - 设备画面、语音输入、可编辑识别文字、模型回答同时展示；适配桌面和手机。
-- 演示模式：模拟识别和逐字回答，所有示例都明确标记，不调用设备或模型。
+- 演示模式：普通对话使用明确标记的示例。用户仍可主动发起真实的画面描述。
 - 电脑 / USB 摄像头预览、设备选择、全屏、截图；打开时才申请摄像头权限。
-- 音箱视频服务：显示 MJPEG / 图片流或浏览器支持的视频 URL；也能回放本地视频。
+- 音箱画面：原生 SDK 单次拍照会显示本轮照片。持续预览可以连接另有提供的 MJPEG 或浏览器视频地址。
 - 浏览器语音识别：使用默认麦克风、显示中间识别文字。浏览器支持和网络环境会影响可用性，识别可能使用浏览器提供商的在线服务。
 - 导入音频、回听；切换到真实模式并配置服务后，可提交音频识别。
 - 通过电脑端服务发送文字并显示真实模型回答；错误、超时与取消处理。
 - 浏览器朗读（使用系统默认声音输出）、复制、导出、最近对话（最多 30 条，本机浏览器存储）。
 
-## 当前边界
+## 输入、拍照和播报接口
 
-这次新增的是独立前端，不修改现有 C++ 采集程序。仓库中的 C++ 程序仍没有 HTTP / SSE 服务；`VoiceSnapshot` 的识别目前只处理拍照命令，不能直接提供完整对话转写。模型和音箱接口需按下列契约另行实现。
+默认使用与页面同源的电脑端服务。API Key 只由电脑端读取。文字和语音入口都能触发一次拍照。原来的 C++ `--voice-snapshot` 仍用于本地识别拍照短指令。
 
-画面预览不自动上传给大模型。浏览器摄像头只有在 Windows 将设备暴露为可用视频输入时才能选到；否则使用电脑端程序将 SDK 图像帧转换为 MJPEG。不得用演示成功代替硬件验收。
+| 环节 | 本地实现 |
+|---|---|
+| 输入 | 文字直接提交。音箱语音用 `connect_lab --mode mic`，设备确认后录制 16 kHz 单声道 WAV，再调用 DeepSeek [语音识别](https://api-docs.deepseek.com/zh-cn/guides/asr/)。 |
+| 拍照 | `connect_frame.exe` 通过厂商摄像头回调取得一张新帧，用 Windows WIC 转成 JPEG。需要时也可手动运行 `.\build-student\Release\connect_frame.exe --output frame.jpg`。 |
+| 看图 | 本机服务将 JPEG 和指令传给 `deepseek-flash` 的对话接口。 [图像理解](https://api-docs.deepseek.com/zh-cn/guides/vision/) |
+| 播报 | DeepSeek [语音合成](https://api-docs.deepseek.com/zh-cn/guides/tts/)返回音频。Windows 用默认输出播放，页面提供重播。厂商 `spk` 接口用于录制扬声器侧音频。 |
 
-朗读通过电脑默认输出播放。要从音箱发声，需要在 Windows 声音设置中选择该音箱。网页没有通过厂商 SDK 直接发送音频。
+### 拍照描述与播放
 
-## 电脑端服务契约
+`POST /api/describe` 接受 `{"text":"描述一下你看到的画面"}`，服务从音箱新拍一张。电脑摄像头模式可在同一请求中加入 `image`，值为浏览器从当前画面获取的 JPEG data URL。响应包含 `answer`、`model`、`image_url`、`audio_url` 和 `played`。图片和播报音频使用有效期至多五分钟的本机地址。语音合成失败时仍返回描述文字，浏览器可尝试系统朗读。
 
-连接设置填写服务根地址，例如 `http://127.0.0.1:8765`。下列是待实现的接口契约，不是已经运行的后端。API 密钥只放服务端，不写入前端文件或浏览器存储。
+`POST /api/playback/stop` 接受空 JSON 对象，用于停止本机正在播放的描述。
 
 ### 状态
 
@@ -39,7 +61,7 @@ python frontend/serve.py
 {"device":{"connected":false,"name":"Connect"},"model":{"connected":true,"name":"your-model"}}
 ```
 
-两个 `connected` 必须为布尔值，只有真实检测成功才返回 `true`。
+两个 `connected` 为布尔值。音箱状态表示最近一次采集结果。首次操作前 `device.checked` 为 `false`。填写 Key 后 `model.configured` 为 `true`，实际收到 DeepSeek 响应后才显示连接成功。
 
 ### 音箱录音与识别
 
@@ -57,9 +79,9 @@ python frontend/serve.py
 {"recording":false,"transcript":"识别出的完整文字"}
 ```
 
-取消或离开页面时会尽力发送 `{"discard":true}`。后端仍应有录音超时保护，不依赖网页一定能发送停止请求。
+取消或离开页面时，前端提交相同的 `session_id` 并设置 `discard: true`。录音最多持续约 12 秒。
 
-`POST /api/transcribe` 使用 `multipart/form-data`，字段 `audio` 为原始音频文件，`session_id` 为会话标识。前端限制文件 30 MB，后端需验证真实格式和体积；浏览器支持的音频不等于识别服务支持的音频。返回 `{"text":"识别文字"}`。
+`POST /api/transcribe` 使用 `multipart/form-data`，字段 `audio` 为原始音频文件。DeepSeek 支持不超过 8 MiB、最长 120 秒的 16 位 PCM WAV 或 Ogg Opus。返回 `{"text":"识别文字"}`。
 
 ### 模型回答
 
@@ -69,9 +91,9 @@ python frontend/serve.py
 {"text":"用户的问题","session_id":"frontend-generated-id"}
 ```
 
-返回 `{"answer":"模型回答","model":"模型名称"}`。当前使用完整 JSON 回答；需要多轮上下文时由服务端按 `session_id` 管理。
+返回 `{"answer":"模型回答","model":"模型名称"}`。本机服务逐条处理请求。
 
-### 实时事件（可选）
+### 外接服务的实时事件（可选）
 
 `GET /api/events` 使用 `text/event-stream`，发送普通 SSE message，每条 `data` 为 JSON，例如：
 
@@ -88,20 +110,21 @@ data: {"type":"error","message":"设备已断开"}
 
 ### 画面
 
-建议提供 `GET /api/video.mjpeg`，类型 `multipart/x-mixed-replace; boundary=frame`，逐帧发送 JPEG。前端通过独立的“音箱画面地址”加载；也支持浏览器可直接播放的 `.mp4` / `.webm` URL。RTSP 和原始 BGR24 不能直接填进网页。
+连续视频使用外接服务提供 `GET /api/video.mjpeg`，类型 `multipart/x-mixed-replace; boundary=frame`，逐帧发送 JPEG。前端通过独立的“音箱画面地址”加载，也支持浏览器可直接播放的 `.mp4` / `.webm` URL。单次拍照描述由本机服务直接连接音箱，无需填写这个地址。
 
 截图对跨域图像受浏览器限制；同源服务或电脑 / USB 摄像头可以保存。若要跨域截图，后续应配置正确的 CORS 与媒体加载方式，或提供服务端截图接口。
 
 ### 本地服务配置
 
-- 优先仅监听 `127.0.0.1`。
-- 如果服务与网页端口不同，允许网页来源 `http://127.0.0.1:4173`，处理 `OPTIONS`，支持 `GET, POST` 与 `Content-Type`。
+- 内置服务仅监听 `127.0.0.1`，页面和接口共用端口。
+- 若另有不同端口的外接服务，由外接服务配置页面来源和跨域访问。
 - API 错误使用非 2xx HTTP 状态，并可返回 `{"error":"便于用户理解的原因"}`。
-- 前端一般请求超时 25 秒，模型回答超时 90 秒。
+- 画面描述的前端请求超时为 100 秒。
 
 ## 文件
 
 - `dist/index.html`：页面与对话框。
 - `dist/styles.css`：响应式样式。
 - `dist/app.js`：交互、媒体预览、演示及服务适配。
-- `serve.py` / `start.cmd`：仅提供静态文件的本地启动工具。
+- `serve.py` / `start.cmd`：启动本地页面和设备服务。
+- `recording.py`、`deepseek.py`：音箱录音桥接和 DeepSeek 接口。

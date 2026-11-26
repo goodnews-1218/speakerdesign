@@ -34,7 +34,11 @@ else()
   if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "Vendor SDK requires Windows x64. For portable code checks use -DCONNECT_LAB_SIMULATOR=ON.")
   endif()
-  add_executable(connect_lab src/main.cpp src/VideoCapture.cpp)
+  add_executable(connect_lab src/main.cpp src/VideoCapture.cpp src/CameraCaptureSupport.cpp)
+  add_executable(connect_frame src/ConnectFrame.cpp src/CameraCaptureSupport.cpp)
+  target_include_directories(connect_frame PRIVATE vendor/include src)
+  target_link_libraries(connect_frame PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/vendor/win64/viaim_connect_sdk.lib" windowscodecs ole32)
   set(lab_target connect_lab)
   target_compile_definitions(connect_lab PRIVATE CONNECT_LAB_VIDEO=1)
   set(CONNECT_VOICE_SDK_DIR "${CMAKE_BINARY_DIR}/voice-deps/sherpa_onnx"
@@ -55,10 +59,16 @@ else()
     endforeach()
   endif()
   target_link_libraries(connect_lab PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/vendor/win64/viaim_connect_sdk.lib")
-  foreach(file viaim_connect_sdk.dll opencv_world4120.dll viaim_connect_descriptions.json)
-    add_custom_command(TARGET connect_lab POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${CMAKE_CURRENT_SOURCE_DIR}/vendor/win64/${file}" "$<TARGET_FILE_DIR:connect_lab>")
-  endforeach()
+  add_custom_target(connect_vendor_runtime
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:connect_lab>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/vendor/win64/viaim_connect_sdk.dll"
+      "${CMAKE_CURRENT_SOURCE_DIR}/vendor/win64/opencv_world4120.dll"
+      "${CMAKE_CURRENT_SOURCE_DIR}/vendor/win64/viaim_connect_descriptions.json"
+      "$<TARGET_FILE_DIR:connect_lab>"
+    VERBATIM)
+  add_dependencies(connect_lab connect_vendor_runtime)
+  add_dependencies(connect_frame connect_vendor_runtime)
 endif()
 if(CONNECT_LAB_TEACHER_ANSWER)
   target_compile_definitions(${lab_target} PRIVATE CONNECT_LAB_TEACHER_ANSWER=1)

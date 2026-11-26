@@ -153,9 +153,16 @@ static void __cdecl onPcm(const ViaimConnectAudioPcmFrame* frame,void* data) {
     } catch(...) {c.ioFailed=true;}
 }
 
-static bool waitConnected(Context& c,int seconds) {
+static bool stopRequested(const std::filesystem::path& stopFile) {
+    if (interrupted) return true;
+    if (stopFile.empty()) return false;
+    std::error_code error;
+    return std::filesystem::exists(stopFile, error);
+}
+
+static bool waitConnected(Context& c,int seconds,const std::filesystem::path& stopFile) {
     auto end=std::chrono::steady_clock::now()+std::chrono::seconds(seconds);
-    while(std::chrono::steady_clock::now()<end && !interrupted) {
+    while(std::chrono::steady_clock::now()<end && !stopRequested(stopFile)) {
         if(c.state==VIAIM_CONNECT_CONNECTION_CONNECTED) return true;
         std::this_thread::sleep_for(50ms);
     }
@@ -200,7 +207,16 @@ static bool recordingCommand(ViaimConnectSdk* sdk,Context& c,const std::string& 
     return ok;
 }
 
-int main(int argc,char** argv) {
+static std::string utf8Path(const std::filesystem::path& path) {
+    const auto value = path.u8string();
+    return {value.begin(), value.end()};
+}
+
+#if defined(_WIN32) && !defined(__MINGW32__)
+int wmain(int argc, wchar_t** argv) {
+#else
+int main(int argc, char** argv) {
+#endif
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
 #endif
@@ -209,16 +225,18 @@ int main(int argc,char** argv) {
 #endif
     std::string mode="mic";int seconds=10,timeout=15;unsigned long vid=0,pid=0;
     std::filesystem::path output="recordings";
+    std::filesystem::path stopFile;
     bool recordVideo=false;
 #ifdef CONNECT_LAB_VOICE
     bool voiceSnapshot=false;
 #endif
     try {
         for(int i=1;i<argc;) {
-            std::string key=argv[i++];
+            const auto key = utf8Path(argv[i++]);
             if(key=="--help") {
                 std::cout<<"connect_lab --mode mic|spk|both --seconds 10 --output recordings [--vid 0x2207 --pid 0x0017] [--connect-timeout 15] [--video]\n";
                 std::cout<<"With --video, press S in the terminal to save a snapshot while recording.\n";
+                std::cout<<"With --stop-file PATH, creating that file stops recording and saves the WAV.\n";
 #ifdef CONNECT_LAB_VOICE
                 std::cout<<"Add --voice-snapshot with --video and a microphone mode for offline Chinese commands.\n";
 #endif
@@ -234,9 +252,12 @@ int main(int argc,char** argv) {
 #endif
             }
             if(i>=argc) throw std::runtime_error("Missing option value");
-            std::string value=argv[i++];size_t used=0;
+            const std::filesystem::path argument(argv[i++]);
+            const auto value = utf8Path(argument);
+            size_t used=0;
             if(key=="--mode") mode=value;
-            else if(key=="--output") output=value;
+            else if(key=="--output") output=argument;
+            else if(key=="--stop-file") stopFile=argument;
             else if(key=="--seconds" || key=="--connect-timeout") {
                 int n=std::stoi(value,&used);if(used!=value.size() || n<1 || n>120) throw std::runtime_error("Duration must be 1..120 seconds");
                 (key=="--seconds"?seconds:timeout)=n;
@@ -299,7 +320,7 @@ int main(int argc,char** argv) {
     try {
         result=viaim_connect_open(sdk,&options,&callbacks);opened=result==VIAIM_CONNECT_OK;
         if(!opened) throw std::runtime_error("OPEN_ERROR="+std::to_string(result));
-        if(!waitConnected(c,timeout)) throw std::runtime_error("Connection timeout or cancelled; verify USB and VID/PID");
+        if(!waitConnected(c,timeout,stopFile)) throw std::runtime_error("Connection timeout or cancelled; verify USB and VID/PID");
         ViaimConnectRequest request=VIAIM_CONNECT_REQUEST_INIT;
         request.command.id=VIAIM_CONNECT_COMMAND_FUNCTION_MODE;
         {std::lock_guard<std::mutex> lock(c.mutex);c.queryPending=true;}
@@ -310,11 +331,12 @@ int main(int argc,char** argv) {
             if(!c.cv.wait_for(lock,3s,[&]{return !c.queryPending;}) || !c.queryOk)
                 throw std::runtime_error("Device query failed or timed out");
         }
+        if(stopRequested(stopFile)) throw std::runtime_error("Recording cancelled before start");
         queryPcVolume(sdk,c);
 #ifdef CONNECT_LAB_VIDEO
         if(c.video && !interrupted) c.video->open(sdk);
 #endif
-        if(interrupted) throw std::runtime_error("Recording cancelled before start");
+        if(stopRequested(stopFile)) throw std::runtime_error("Recording cancelled before start");
         startAttempted=true;
         if(!recordingCommand(sdk,c,mode,false)) throw std::runtime_error("Recording start not confirmed");
         c.acceptAudio=true;
@@ -330,7 +352,7 @@ int main(int argc,char** argv) {
         log("Recording active; Ctrl+C stops early");
         auto end=std::chrono::steady_clock::now()+std::chrono::seconds(seconds);
         auto next=std::chrono::steady_clock::now()+1s;
-        while(std::chrono::steady_clock::now()<end && !interrupted && !c.ioFailed) {
+        while(std::chrono::steady_clock::now()<end && !stopRequested(stopFile) && !c.ioFailed) {
             if(c.state!=VIAIM_CONNECT_CONNECTION_CONNECTED || !c.acceptAudio)
                 throw std::runtime_error("Device disconnected; recording is incomplete");
 #ifdef CONNECT_LAB_VIDEO
@@ -370,7 +392,7 @@ int main(int argc,char** argv) {
     log("MIC_BYTES="+std::to_string(c.micBytes)+" SPK_BYTES="+std::to_string(c.spkBytes)+
         " DROPPED="+std::to_string(c.dropped)+" REJECTED="+std::to_string(c.rejected));
     log(recordingSummary(c.micBytes));
-    log("OUTPUT="+c.directory.string());
+    log("OUTPUT="+utf8Path(c.directory));
     bool hasAudio=(mode=="mic"?c.micBytes>0:mode=="spk"?c.spkBytes>0:c.micBytes>0 && c.spkBytes>0);
     bool ok=recorded && stopConfirmed && hasAudio && !c.ioFailed && c.dropped==0 && c.rejected==0 &&
         cameraResult==VIAIM_CONNECT_OK && closeResult==VIAIM_CONNECT_OK && destroyResult==VIAIM_CONNECT_OK && videoOk;

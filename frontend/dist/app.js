@@ -4,8 +4,11 @@
   const $ = (id) => document.getElementById(id);
   const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const initialAnswer = '你好，我是你的语音助手。\n\n从一句话开始，我可以成为你身边的灵感搭档。\n\n聊一聊：回答问题、整理思路，让复杂的事情更清楚。\n看一看：画面预览已准备好；视觉理解需要后续接入模型。\n听一听：把回答读给你听，让交流更自然。\n\n这是示例回答。连接模型服务后，这里将显示真实回复。';
+  const initialAnswer = '你好，我是你的语音助手。\n\n从一句话开始，我可以成为你身边的灵感搭档。\n\n聊一聊：回答问题、整理思路，让复杂的事情更清楚。\n看一看：选择“描述当前画面”，拍照并获得 DeepSeek 的语音描述。\n听一听：把回答读给你听，让交流更自然。\n\n这是示例回答。连接模型服务后，这里将显示真实回复。';
   const exampleQuestion = '你好，介绍一下你能帮我做什么吧。';
+  const describeQuestion = '描述一下你看到的画面';
+  const localService = /^https?:$/.test(window.location.protocol) ? window.location.origin : '';
+  const replyAudio = $('reply-audio');
   const storage = {
     get(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
     set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; } }
@@ -17,7 +20,10 @@
   const uid = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   let currentId = uid(), answer = initialAnswer, answerQuestion = exampleQuestion, answerKind = 'demo', generation = 0, busy = false;
   let recording = false, recordStarted = 0, recordTimer = null, recognition = null, eventSource = null;
-  let serviceStatus = null, requestController = null, speechActive = false, cameraVersion = 0;
+  let serviceStatus = null, requestController = null, serviceCapture = null;
+  let speechActive = false, speechVersion = 0, answerAudioUrl = '', cameraVersion = 0;
+  let serverPlayback = false, serverPlaybackTimer;
+  let descriptionInProgress = false, pendingPlaybackStop = null;
   let cameraStream = null, cameraKind = '', videoObjectUrl = '', audioObjectUrl = '', cameraTimeout = null, cameraPending = false;
   let toastTimer;
 
@@ -33,7 +39,7 @@
   function setFlow(step) { ['listen', 'read', 'answer', 'speak'].forEach((name) => $(`flow-${name}`).classList.toggle('active', step === name)); }
   function setBusy(value) {
     busy = value;
-    ['send-button', 'upload-button', 'demo-button'].forEach((id) => { $(id).disabled = value; });
+    ['send-button', 'upload-button', 'demo-button', 'describe-button'].forEach((id) => { $(id).disabled = value; });
     $('record-button').disabled = value && !recording;
     $('answer-content').setAttribute('aria-busy', String(value && !recording));
     $('transcript').readOnly = value;
@@ -46,10 +52,25 @@
     clearInterval(recordTimer);
     if (value) {
       recordStarted = Date.now(); $('recording-time').textContent = '00:00'; setFlow('listen');
-      recordTimer = setInterval(() => { $('recording-time').textContent = displayTime(Date.now() - recordStarted); }, 250);
+      recordTimer = setInterval(() => {
+        const elapsed = Date.now() - recordStarted;
+        $('recording-time').textContent = displayTime(elapsed);
+        if (serviceCapture?.local && elapsed >= 12000) endRecording();
+      }, 250);
     }
   }
+  function clearDescriptionMedia() {
+    answerAudioUrl = '';
+    replyAudio.removeAttribute('src');
+    replyAudio.load();
+    const image = $('description-image');
+    image.onload = null;
+    image.onerror = null;
+    image.removeAttribute('src');
+    $('description-photo').hidden = true;
+  }
   function showAnswer(text, kind = 'demo', modelName = '') {
+    clearDescriptionMedia();
     answer = text; answerKind = kind;
     $('answer-content').className = 'answer-content plain-answer'; $('answer-content').textContent = text;
     $('answer-badge').textContent = kind === 'demo' ? '演示回答' : '模型回答';
@@ -60,6 +81,7 @@
     $('copy-answer').disabled = !text; $('speak-answer').disabled = !text;
   }
   function emptyAnswer(message = '你的下一句，值得一个好回答。') {
+    clearDescriptionMedia();
     answer = ''; answerQuestion = ''; $('answer-content').className = 'answer-content empty-answer';
     answerKind = config.mode === 'demo' ? 'demo' : 'model';
     $('answer-model').textContent = config.mode === 'demo' ? '✳ 演示助手' : (serviceStatus?.model?.connected ? (serviceStatus.model.name || '已连接模型') : '等待模型连接');
@@ -74,12 +96,19 @@
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash) throw new Error('请使用不含账户信息或锚点的 HTTP / HTTPS 地址。');
     return url.href.replace(/\/$/, '');
   }
-  function endpoint(path, base = config.serviceUrl) { const url = normalizeUrl(base, true); return `${url.replace(/\/$/, '')}/${path.replace(/^\//, '')}`; }
-  async function api(path, options = {}, base = config.serviceUrl) {
+  function endpoint(path, base = config.serviceUrl || localService) { const url = normalizeUrl(base, true); return `${url.replace(/\/$/, '')}/${path.replace(/^\//, '')}`; }
+  async function api(path, options = {}, base = config.serviceUrl || localService) {
     const controller = new AbortController(), signal = options.signal;
     const cancel = () => controller.abort();
     if (signal?.aborted) controller.abort(); else signal?.addEventListener('abort', cancel, { once: true });
-    const timer = setTimeout(() => controller.abort(), path === '/api/chat' ? 90000 : 25000);
+    const timeout = {
+      '/api/describe': 100000,
+      '/api/chat': 90000,
+      '/api/recording/stop': 40000,
+      '/api/transcribe': 40000,
+      '/api/playback/stop': 5000
+    }[path] || 25000;
+    const timer = setTimeout(() => controller.abort(), timeout);
     try {
       const headers = options.body instanceof FormData ? {} : options.body ? { 'Content-Type': 'application/json' } : {};
       const response = await fetch(endpoint(path, base), { ...options, headers: { ...headers, ...options.headers }, signal: controller.signal, cache: 'no-store' });
@@ -100,30 +129,82 @@
   function refreshConnection() {
     const connected = serviceStatus?.device?.connected === true;
     const model = serviceStatus?.model?.connected === true;
+    const deviceText = connected ? '音箱已连接' : serviceStatus?.device?.checked === false ? '等待检测音箱' : '设备未连接';
+    const modelText = model ? '模型已连接' : serviceStatus?.model?.configured ? '模型已配置' : '模型未连接';
     $('connection-label').classList.toggle('connected', connected);
     $('connection-label').replaceChildren(); const dot = document.createElement('span'); dot.className = 'status-dot';
-    $('connection-label').append(dot, document.createTextNode(connected ? '音箱已连接' : '设备未连接'));
-    $('sidebar-device').textContent = connected ? (serviceStatus.device.name || '设备已连接') : '设备未连接';
-    $('footer-status').textContent = `${connected ? '音箱已连接' : '音箱未连接'} · ${model ? '模型已连接' : '模型未连接'}`;
+    $('connection-label').append(dot, document.createTextNode(deviceText));
+    $('sidebar-device').textContent = connected ? (serviceStatus.device.name || deviceText) : deviceText;
+    $('footer-status').textContent = `${deviceText} · ${modelText}`;
   }
   function applyMode() {
     const copy = {
-      demo: ['先体验，再连接', '当前为演示模式，示例内容不来自音箱或大模型。', '演示输入', '演示模式使用示例文本，不会开启麦克风。'],
-      browser: ['用声音，开启对话', '使用电脑默认麦克风识别；模型回答需连接电脑端服务。', '电脑麦克风', '浏览器识别可能使用在线服务；不支持时可输入文字或导入音频。'],
-      service: ['让音箱，接入对话', '从电脑端音箱服务接收识别文字，向模型发送问题。', '音箱采集服务', '通过设备服务采集音频，识别文字会显示在右侧。']
+      demo: ['先体验，再连接', '普通对话使用示例。可单独使用“描述当前画面”。', '演示输入', '演示模式使用示例文本，不会开启麦克风。'],
+      browser: ['用声音，开启对话', '使用电脑默认麦克风识别。', '电脑麦克风', '可以说“描述一下你看到的画面”。浏览器识别可能使用在线服务。'],
+      service: ['让音箱，接入对话', '从音箱接收识别文字，向模型发送问题。', '音箱采集服务', '开始录音后，说“描述一下你看到的画面”，然后结束录音。']
     }[config.mode];
     ['mode-title', 'mode-description', 'audio-source-label', 'audio-note'].forEach((id, index) => { $(id).textContent = copy[index]; });
+    $('describe-help').textContent = config.mode === 'service'
+      ? '使用音箱摄像头拍照，发送给 DeepSeek 后语音播报。'
+      : '拍摄一张照片并发送给 DeepSeek，完成后语音播报。';
     $('demo-button').hidden = config.mode !== 'demo'; $('audio-status').textContent = '准备好，开始说话'; refreshConnection();
   }
-  function stopSpeech() { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speechActive = false; $('speak-answer').innerHTML = `${icon('volume')}<span>朗读回答</span>`; setFlow(''); }
+  function stopSpeech() {
+    ++speechVersion;
+    replyAudio.onended = null;
+    replyAudio.onerror = null;
+    replyAudio.pause();
+    replyAudio.currentTime = 0;
+    window.speechSynthesis?.cancel();
+    const stopServer = serverPlayback || descriptionInProgress;
+    descriptionInProgress = false;
+    finishSpeech();
+    if (stopServer) {
+      const stop = api('/api/playback/stop', {
+        method: 'POST',
+        body: '{}',
+        keepalive: true
+      }, localService).catch(() => {});
+      pendingPlaybackStop = stop;
+      stop.then(() => {
+        if (pendingPlaybackStop === stop) pendingPlaybackStop = null;
+      });
+    }
+    return pendingPlaybackStop;
+  }
+  function finishSpeech() {
+    clearTimeout(serverPlaybackTimer);
+    serverPlayback = false;
+    speechActive = false;
+    $('speak-answer').innerHTML = `${icon('volume')}<span>朗读回答</span>`;
+    setFlow('');
+  }
+  function markPlaying() {
+    speechActive = true;
+    setFlow('speak');
+    $('speak-answer').innerHTML = `${icon('stop')}<span>停止播报</span>`;
+  }
+  function discardServiceRecording() {
+    const capture = serviceCapture;
+    serviceCapture = null;
+    if (!capture) return;
+    api('/api/recording/stop', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: capture.sessionId, discard: true }),
+      keepalive: true
+    }, capture.base).catch(() => {});
+  }
+  function speakNotice(message) {
+    if (!window.speechSynthesis) return;
+    const utterance = new SpeechSynthesisUtterance(message);
+    utterance.lang = 'zh-CN';
+    window.speechSynthesis.speak(utterance);
+  }
   async function cancelWork() {
     ++generation; requestController?.abort(); requestController = null;
     if (recognition) { recognition.onend = null; recognition.onresult = null; recognition.onerror = null; try { recognition.abort(); } catch {} recognition = null; }
-    if (recording && config.mode === 'service') {
-      const previousBase = config.serviceUrl;
-      // Capture the old URL so a settings change cannot stop a different service.
-      api('/api/recording/stop', { method: 'POST', body: JSON.stringify({ discard: true }) }, previousBase).catch(() => {});
-    }
+    discardServiceRecording();
+    announceDescription('');
     setRecording(false); setBusy(false); stopSpeech();
   }
   function remember(question, response, kind) {
@@ -152,15 +233,136 @@
   async function loadHistory(item) { await cancelWork(); currentId = item.id; answerQuestion = item.text; setTranscript(item.text, '历史记录'); showAnswer(item.answer, item.mode); $('audio-status').textContent = '已载入历史对话'; $('history-dialog').close(); }
   function demoResponse(question) {
     if (/介绍|做什么|你好|能力/.test(question)) return initialAnswer;
-    if (/画面|看到|摄像|桌面|拍照/.test(question)) return '我可以陪你一起观察，不过当前这段是演示回答。\n\n你可以在左侧开启电脑或 USB 摄像头，查看实时画面，也可以保存当前画面。\n\n页面目前只预览视频，不会把画面发送给模型。接入视觉模型后，才能根据真实画面回答“看到了什么”。';
+    if (/画面|看到|摄像|桌面|拍照/.test(question)) return '当前这段是演示回答。\n\n选择“描述当前画面”，可以拍一张照片，发送给 DeepSeek 生成语音描述。';
     if (/计划|安排|工作|学习/.test(question)) return '可以，我们把事情拆成更容易开始的几步。\n\n1. 先确定今天最重要的一件事。\n2. 为它安排一段不被打扰的时间。\n3. 把剩余任务分成“今天做”和“以后做”。\n4. 结束前花几分钟回顾进展。\n\n这是预设演示内容。连接模型服务后，我会根据你的具体问题生成回答。';
     return `我收到了你的问题：\n“${question}”\n\n这里演示的是“输入 → 识别文字 → 回答”的完整交互。你可以修改上方文字、查看历史记录，或点击朗读听听回答。\n\n当前没有调用大模型。这段内容是页面示例，连接模型服务后将显示真实回答。`;
+  }
+  function isDescribeCommand(text) {
+    const command = text.replace(/[\s，。！？、,.!?]/g, '')
+      .replace(/^(?:请问|请你|请您|请|帮我|麻烦你|麻烦|能不能|可以){1,3}/, '')
+      .replace(/[吧吗]$/, '');
+    return /^(?:描述|介绍|说说|讲讲)(?:一下)?(?:[你您](?:现在)?(?:所)?看到的|当前的?|眼前的?|前方的?|周围的?)?(?:画面|场景|景象|环境)$/.test(command)
+      || /^(?:看看|看一下|告诉我)?(?:前面|前方|眼前|周围|桌上|桌面上|镜头里|画面里)(?:有|都有)什么$/.test(command)
+      || /^(?:告诉我)?你(?:现在)?看到(?:了)?什么$/.test(command);
+  }
+  function announceDescription(message, error = false) {
+    const status = $('describe-status');
+    status.textContent = message;
+    status.dataset.state = error ? 'error' : 'status';
+  }
+  function captureBrowserPhoto() {
+    const track = cameraStream?.getVideoTracks()[0];
+    if (cameraKind !== 'browser' || track?.readyState !== 'live') return '';
+    const video = $('camera-video');
+    if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+      throw new Error('摄像头画面尚未准备好，请稍后重试。');
+    }
+
+    const scale = Math.min(1, 1600 / Math.max(video.videoWidth, video.videoHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.88);
+  }
+  function localMediaUrl(value) {
+    if (typeof value !== 'string' || !value) return '';
+    try {
+      const media = new URL(value, localService);
+      if (media.origin === localService && media.pathname.startsWith('/api/media/')) return media.href;
+    } catch {}
+    return '';
+  }
+  function showDescriptionPhoto(source) {
+    if (!source) return;
+    const image = $('description-image');
+    const photo = $('description-photo');
+    image.onload = () => { photo.hidden = false; };
+    image.onerror = () => { photo.hidden = true; };
+    image.src = source;
+  }
+  async function describeScene(question = describeQuestion, fromVoice = false) {
+    if (busy) return;
+    if (!localService) {
+      const message = '请从本地启动器打开页面，再使用画面描述。';
+      announceDescription(message, true);
+      if (fromVoice) speakNotice(message);
+      return;
+    }
+    const stopping = stopSpeech();
+    clearDescriptionMedia();
+    const ticket = ++generation;
+    requestController = new AbortController();
+    $('answer-content').setAttribute('aria-live', 'off');
+    setBusy(true);
+    setFlow('answer');
+    announceDescription('正在拍照并生成语音描述。');
+    $('answer-badge').textContent = '正在描述画面';
+    $('answer-badge').className = 'badge amber';
+    $('answer-content').className = 'answer-content plain-answer busy-dots';
+    $('answer-content').textContent = '等待 DeepSeek 描述画面';
+    $('copy-answer').disabled = true;
+
+    try {
+      if (stopping) await stopping;
+      if (ticket !== generation) return;
+      const image = config.mode === 'service' ? '' : captureBrowserPhoto();
+      const body = { text: question };
+      if (image) body.image = image;
+      descriptionInProgress = true;
+      const response = await api('/api/describe', {
+        method: 'POST',
+        signal: requestController.signal,
+        body: JSON.stringify(body)
+      }, localService);
+      if (ticket !== generation) return;
+      if (typeof response.answer !== 'string' || !response.answer.trim()) {
+        throw new Error('DeepSeek 没有返回画面描述。');
+      }
+
+      descriptionInProgress = false;
+      answerQuestion = question;
+      showAnswer(response.answer, 'model', response.model || 'DeepSeek Flash');
+      answerAudioUrl = localMediaUrl(response.audio_url);
+      showDescriptionPhoto(localMediaUrl(response.image_url) || image);
+      $('answer-badge').textContent = '画面描述';
+      remember(question, response.answer, 'model');
+      announceDescription(answerAudioUrl ? '画面描述已就绪。' : '画面描述已就绪，使用浏览器朗读。');
+      setBusy(false);
+      if (response.played === true) {
+        serverPlayback = true;
+        markPlaying();
+        const duration = response.audio_duration_ms;
+        const estimate = Math.max(3500, Array.from(answer).length * 350);
+        serverPlaybackTimer = setTimeout(finishSpeech, Number.isFinite(duration) && duration > 0 ? duration : estimate);
+      } else {
+        await speakAnswer(true);
+      }
+      if (config.mode !== 'demo') checkSavedService();
+    } catch (error) {
+      if (ticket !== generation) return;
+      if (descriptionInProgress) stopSpeech();
+      emptyAnswer(error.message);
+      $('answer-badge').textContent = '画面描述失败';
+      $('answer-badge').className = 'badge amber';
+      announceDescription(error.message, true);
+      if (fromVoice) speakNotice(error.message);
+    } finally {
+      if (ticket === generation) {
+        setBusy(false);
+        if (!speechActive) setFlow('');
+        requestController = null;
+      }
+    }
   }
   async function sendQuestion() {
     if (busy) return;
     const question = $('transcript').value.trim(); if (!question) { toast('先说一句话，或在识别文字区域输入问题。'); $('transcript').focus(); return; }
-    if (config.mode !== 'demo' && !config.serviceUrl) { toast('识别文字已准备好，请先配置模型服务地址。'); openSettings(); return; }
-    stopSpeech(); const ticket = ++generation; setBusy(true); setFlow('answer');
+    if (isDescribeCommand(question)) return describeScene(question);
+    if (config.mode !== 'demo' && !config.serviceUrl && !localService) { toast('请从本地启动器打开页面，或设置电脑端服务地址。'); openSettings(); return; }
+    stopSpeech(); const ticket = ++generation;
+    $('answer-content').setAttribute('aria-live', 'polite');
+    setBusy(true); setFlow('answer');
     $('answer-badge').textContent = config.mode === 'demo' ? '演示生成中' : '正在思考'; $('answer-badge').className = 'badge amber';
     $('answer-content').className = 'answer-content plain-answer busy-dots'; $('answer-content').textContent = config.mode === 'demo' ? '正在准备演示回答' : '正在等待模型回答';
     $('copy-answer').disabled = true; $('speak-answer').disabled = true;
@@ -191,48 +393,120 @@
     if (ticket !== generation) return; setRecording(false); setBusy(false); setFlow('read'); $('audio-status').textContent = '示例文字已就绪'; $('transcript-badge').textContent = '示例文字';
     if (autoSend) await sendQuestion();
   }
-  function browserRecording() {
+  async function browserRecording() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) { toast('这个浏览器不支持语音识别。可直接输入文字，或通过服务导入音频。'); return; }
-    stopSpeech(); const ticket = ++generation; const recognizer = new SpeechRecognition(); recognition = recognizer;
+    const stopping = stopSpeech();
+    const ticket = ++generation;
+    setBusy(true);
+    if (stopping) await stopping;
+    if (ticket !== generation) return;
+    const recognizer = new SpeechRecognition();
+    recognition = recognizer;
     recognizer.lang = 'zh-CN'; recognizer.continuous = true; recognizer.interimResults = true;
-    let finalText = '', failed = false;
+    let finalText = '', failed = false, commandDetected = false;
     recognizer.onstart = () => { if (ticket !== generation) { recognizer.abort(); return; } setRecording(true); setBusy(true); setTranscript('', '正在聆听'); $('audio-status').textContent = '正在聆听，请自然说话'; };
     recognizer.onresult = (event) => {
       if (ticket !== generation) return; let partial = '';
       for (let index = event.resultIndex; index < event.results.length; index++) { if (event.results[index].isFinal) finalText += event.results[index][0].transcript; else partial += event.results[index][0].transcript; }
       setTranscript(finalText + partial, partial ? '识别中' : '已识别');
+      if (!partial && !commandDetected && isDescribeCommand(finalText)) {
+        commandDetected = true;
+        try { recognizer.stop(); } catch {}
+      }
     };
     recognizer.onerror = (event) => {
       if (ticket !== generation) return; failed = true;
       const messages = { 'not-allowed': '麦克风权限未开启，请在浏览器中允许使用麦克风。', 'audio-capture': '找不到可用的麦克风，请检查电脑输入设备。', 'network': '浏览器识别服务不可用。可改用音箱服务或直接输入文字。', 'no-speech': '还没有听清，请靠近麦克风后重试。', 'service-not-allowed': '浏览器语音识别服务未获许可，请改用文字或音箱服务。' };
       $('audio-status').textContent = '语音识别未完成'; toast(messages[event.error] || '语音识别已中断，请重试。');
     };
-    recognizer.onend = () => { if (ticket !== generation) return; recognition = null; setRecording(false); setBusy(false); setFlow('read'); $('transcript-badge').textContent = $('transcript').value.trim() ? '识别完成' : '等待输入'; if (!failed) $('audio-status').textContent = $('transcript').value.trim() ? '识别完成，可修改后发送' : '还没有识别到文字'; };
+    recognizer.onend = () => {
+      if (ticket !== generation) return;
+      recognition = null;
+      setRecording(false);
+      setBusy(false);
+      setFlow('read');
+      const text = $('transcript').value.trim();
+      $('transcript-badge').textContent = text ? '识别完成' : '等待输入';
+      if (failed) return;
+      if (isDescribeCommand(finalText)) {
+        setTranscript(finalText.trim(), '识别完成');
+        $('audio-status').textContent = '已收到画面描述指令';
+        describeScene(finalText.trim(), true);
+      } else {
+        $('audio-status').textContent = text ? '识别完成，可修改后发送' : '还没有识别到文字';
+      }
+    };
     try { setBusy(true); $('audio-status').textContent = '等待麦克风权限'; recognizer.start(); } catch { recognition = null; setBusy(false); toast('无法开启语音识别，请检查浏览器和麦克风权限。'); }
   }
   async function serviceRecordingStart() {
-    if (!config.serviceUrl) { toast('先配置电脑端的音箱服务地址。'); openSettings(); return; }
-    stopSpeech(); const ticket = ++generation; setBusy(true); $('audio-status').textContent = '正在启动音箱录音'; requestController = new AbortController();
+    const base = config.serviceUrl || localService;
+    if (!base) { toast('请从本地启动器打开页面，或设置电脑端服务地址。'); openSettings(); return; }
+    const stopping = stopSpeech();
+    const ticket = ++generation;
+    setBusy(true);
+    $('audio-status').textContent = '正在启动音箱录音';
     try {
-      const data = await api('/api/recording/start', { method: 'POST', body: JSON.stringify({ session_id: currentId }), signal: requestController.signal });
+      if (stopping) await stopping;
+      if (ticket !== generation) return;
+      serviceCapture = { base, sessionId: currentId, local: base === localService };
+      requestController = new AbortController();
+      const data = await api('/api/recording/start', {
+        method: 'POST',
+        body: JSON.stringify({ session_id: serviceCapture.sessionId }),
+        signal: requestController.signal
+      }, base);
       if (ticket !== generation) return; if (data.recording !== true) throw new Error('设备服务未确认录音开始。');
-      setTranscript('', '正在聆听'); setRecording(true); setBusy(true); $('audio-status').textContent = '正在从音箱接收语音';
-    } catch (error) { if (ticket === generation) { setBusy(false); $('audio-status').textContent = '录音未能启动'; toast(error.message); } }
+      setTranscript('', '正在聆听');
+      setRecording(true);
+      setBusy(true);
+      $('audio-status').textContent = '音箱录音已开始，可以说话。';
+    } catch (error) {
+      if (ticket !== generation) return;
+      discardServiceRecording();
+      setBusy(false);
+      $('audio-status').textContent = '录音未能启动';
+      toast(error.message);
+      speakNotice(error.message);
+    }
   }
   async function endRecording() {
     if (config.mode === 'demo') { ++generation; setRecording(false); setBusy(false); setFlow('read'); $('transcript-badge').textContent = '示例文字'; $('audio-status').textContent = '演示已停止'; return; }
-    if (recognition) { recognition.stop(); $('audio-status').textContent = '正在完成识别'; return; }
-    if (config.mode !== 'service') return;
-    const ticket = generation; setRecording(false); setBusy(true); $('audio-status').textContent = '正在识别录音'; requestController = new AbortController();
+    if (recognition) { try { recognition.stop(); } catch {} $('audio-status').textContent = '正在完成识别'; return; }
+    const capture = serviceCapture;
+    if (config.mode !== 'service' || !capture) return;
+    const ticket = generation;
+    setRecording(false);
+    setBusy(true);
+    $('audio-status').textContent = '正在识别录音';
+    requestController = new AbortController();
+    let descriptionCommand = '';
     try {
-      const data = await api('/api/recording/stop', { method: 'POST', body: JSON.stringify({ session_id: currentId }), signal: requestController.signal });
+      const data = await api('/api/recording/stop', {
+        method: 'POST',
+        body: JSON.stringify({ session_id: capture.sessionId }),
+        signal: requestController.signal
+      }, capture.base);
       if (ticket !== generation) return;
       if (typeof data.transcript === 'string') setTranscript(data.transcript, '识别完成');
-      if (!$('transcript').value.trim()) throw new Error('录音已结束，但服务没有返回识别文字。');
-      $('audio-status').textContent = '识别完成，可修改后发送'; setFlow('read');
-    } catch (error) { if (ticket === generation) { toast(error.message); $('audio-status').textContent = '识别未完成'; } }
-    finally { if (ticket === generation) setBusy(false); }
+      const transcript = $('transcript').value.trim();
+      if (!transcript) throw new Error('录音已结束，但服务没有返回识别文字。');
+      if (isDescribeCommand(transcript)) descriptionCommand = transcript;
+      $('audio-status').textContent = descriptionCommand ? '已收到画面描述指令' : '识别完成，可修改后发送';
+      setFlow('read');
+    } catch (error) {
+      if (ticket !== generation) return;
+      toast(error.message);
+      speakNotice(error.message);
+      $('audio-status').textContent = '识别未完成';
+    } finally {
+      if (ticket === generation) {
+        serviceCapture = null;
+        requestController = null;
+        setBusy(false);
+      }
+    }
+    if (descriptionCommand && ticket === generation) describeScene(descriptionCommand, true);
   }
   async function importAudio(file) {
     if (!file) return;
@@ -240,7 +514,7 @@
     if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl); audioObjectUrl = URL.createObjectURL(file);
     $('audio-preview').src = audioObjectUrl; $('audio-preview').hidden = false;
     $('audio-status').textContent = `已导入：${file.name}`; $('audio-source-label').textContent = '本地音频';
-    if (config.mode === 'demo' || !config.serviceUrl) { toast('音频已导入，可在下方回听。真实转写需在连接设置中切换模式并接入服务。'); return; }
+    if (config.mode === 'demo' || (!config.serviceUrl && !localService)) { toast('音频已导入，可在下方回听。真实转写需在连接设置中切换模式并接入服务。'); return; }
     const ticket = ++generation; setBusy(true); setFlow('read'); $('transcript-badge').textContent = '识别中'; requestController = new AbortController();
     try {
       const body = new FormData(); body.append('audio', file); body.append('session_id', currentId);
@@ -253,11 +527,11 @@
   }
   function openSettings() { $('mode-select').value = config.mode; $('service-url').value = config.serviceUrl; $('video-url').value = config.videoUrl; modeHelp(); if (!$('settings-dialog').open) $('settings-dialog').showModal(); }
   function modeHelp() {
-    $('mode-help').textContent = { demo: '示例对话仅演示交互，不会调用大模型。', browser: '使用浏览器默认麦克风，识别可能将音频发送到浏览器提供商。模型回答仍需电脑端服务。', service: '需要配套电脑端服务负责音箱采集和语音识别；网页不会直接调用厂商 DLL。' }[$('mode-select').value];
+    $('mode-help').textContent = { demo: '普通对话使用示例。描述画面会调用 DeepSeek。', browser: '使用浏览器默认麦克风，识别可能将音频发送到浏览器提供商。', service: '使用本地服务从音箱录音并转写。服务地址可留空。' }[$('mode-select').value];
   }
   function connectEvents() {
     eventSource?.close(); eventSource = null;
-    if (!config.serviceUrl || config.mode === 'demo') return;
+    if (!config.serviceUrl || config.serviceUrl === localService || config.mode === 'demo') return;
     try {
       const events = new EventSource(endpoint('/api/events')); eventSource = events;
       events.onmessage = (event) => {
@@ -273,9 +547,16 @@
   }
   async function checkSavedService() {
     serviceStatus = null; refreshConnection();
-    if (!config.serviceUrl || config.mode === 'demo') return;
-    const base = config.serviceUrl;
-    try { const data = validStatus(await api('/api/status', {}, base)); if (base === config.serviceUrl && config.mode !== 'demo') { serviceStatus = data; refreshConnection(); connectEvents(); } } catch { if (base === config.serviceUrl) { serviceStatus = null; refreshConnection(); } }
+    if (config.mode === 'demo') return;
+    const base = config.serviceUrl || localService;
+    if (!base) return;
+    const isCurrent = () => base === (config.serviceUrl || localService) && config.mode !== 'demo';
+    try {
+      const data = validStatus(await api('/api/status', {}, base));
+      if (isCurrent()) { serviceStatus = data; refreshConnection(); connectEvents(); }
+    } catch {
+      if (isCurrent()) { serviceStatus = null; refreshConnection(); }
+    }
   }
   function setCameraLoading(loading) { cameraPending = loading; $('start-camera').disabled = loading; $('camera-toggle').textContent = loading ? '取消连接' : cameraKind ? '关闭预览' : '开启预览'; }
   function stopCamera() {
@@ -356,16 +637,69 @@
       canvas.toBlob((blob) => { if (blob) { download(blob, `connect-frame-${Date.now()}.png`); toast('当前画面已保存。'); } else toast('无法保存画面，请重试。'); }, 'image/png');
     } catch { toast('该视频源限制了跨域截图。可在电脑端视频服务保存画面，或改用 USB 摄像头。'); }
   }
-  function speakAnswer() {
+  function speakWithBrowser(ticket) {
+    const synthesizer = window.speechSynthesis;
+    if (!synthesizer) return false;
+    synthesizer.cancel();
+    const utterance = new SpeechSynthesisUtterance(answer);
+    utterance.lang = 'zh-CN';
+    const chineseVoice = synthesizer.getVoices().find((voice) => /^zh(?:[-_]|$)/i.test(voice.lang));
+    if (chineseVoice) utterance.voice = chineseVoice;
+    utterance.onend = () => {
+      if (ticket === speechVersion) finishSpeech();
+    };
+    utterance.onerror = () => {
+      if (ticket !== speechVersion) return;
+      finishSpeech();
+      const message = '浏览器未能播放语音。请检查 Windows 的声音输出，或点“朗读回答”重试。';
+      if ($('answer-badge').textContent === '画面描述') announceDescription(message, true);
+      else toast(message);
+    };
+    try {
+      markPlaying();
+      synthesizer.speak(utterance);
+      return true;
+    } catch {
+      finishSpeech();
+      return false;
+    }
+  }
+  async function speakAnswer(automatic = false) {
     if (speechActive) { stopSpeech(); return; }
     if (!answer) return;
-    if (!('speechSynthesis' in window)) { toast('当前浏览器不支持朗读，可以复制回答后使用系统朗读。'); return; }
-    window.speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(answer); utterance.lang = 'zh-CN'; utterance.rate = 1;
-    const chineseVoice = window.speechSynthesis.getVoices().find((voice) => /^zh(-|_)/i.test(voice.lang)); if (chineseVoice) utterance.voice = chineseVoice;
-    utterance.onend = () => { speechActive = false; $('speak-answer').innerHTML = `${icon('volume')}<span>朗读回答</span>`; setFlow(''); };
-    utterance.onerror = () => { if (!speechActive) return; stopSpeech(); toast('朗读未能完成，请检查系统语音和播放设备。'); };
-    speechActive = true; setFlow('speak'); $('speak-answer').innerHTML = `${icon('stop')}<span>停止朗读</span>`; window.speechSynthesis.speak(utterance);
-    toast('正在通过电脑默认声音输出朗读；可在 Windows 中将输出切换为音箱。');
+    const ticket = ++speechVersion;
+    if (answerAudioUrl) {
+      replyAudio.src = answerAudioUrl;
+      replyAudio.onended = () => {
+        if (ticket === speechVersion) finishSpeech();
+      };
+      try {
+        markPlaying();
+        await replyAudio.play();
+        if (ticket !== speechVersion) return;
+        replyAudio.onerror = () => {
+          if (ticket !== speechVersion) return;
+          finishSpeech();
+          if (speakWithBrowser(ticket)) {
+            announceDescription('音频暂时无法播放，正在使用浏览器朗读。');
+          } else {
+            announceDescription('音频暂时无法播放。请检查 Windows 的声音输出。', true);
+          }
+        };
+        return;
+      } catch (error) {
+        if (ticket !== speechVersion) return;
+        finishSpeech();
+        if (automatic && error.name === 'NotAllowedError') {
+          announceDescription('浏览器需要手动开始播放。点“朗读回答”即可听取描述。');
+          return;
+        }
+      }
+    }
+    if (speakWithBrowser(ticket)) return;
+    const message = '当前浏览器无法朗读，请检查系统语音和播放设备。';
+    if (automatic) announceDescription(message, true);
+    else toast(message);
   }
   async function newSession() {
     await cancelWork(); currentId = uid(); setTranscript('', '等待输入'); emptyAnswer(); $('recording-time').textContent = '00:00'; $('audio-status').textContent = '新对话已准备好';
@@ -376,6 +710,10 @@
   // UI binding. All model and recognition text is inserted as text, never as HTML.
   $('transcript').addEventListener('input', () => { updateCount(); $('transcript-badge').textContent = '可发送'; });
   $('send-button').addEventListener('click', sendQuestion);
+  $('describe-button').addEventListener('click', () => {
+    setTranscript(describeQuestion, '画面描述指令');
+    describeScene();
+  });
   $('demo-button').addEventListener('click', () => { if (!busy && config.mode === 'demo') demoRecording(true); });
   $('record-button').addEventListener('click', () => { if (recording) endRecording(); else if (!busy) { if (config.mode === 'demo') demoRecording(); else if (config.mode === 'browser') browserRecording(); else serviceRecordingStart(); } });
   $('upload-button').addEventListener('click', () => { $('audio-file').value = ''; $('audio-file').click(); });
@@ -386,7 +724,13 @@
   $('mode-select').addEventListener('change', modeHelp);
   $('test-connection').addEventListener('click', async () => {
     $('test-connection').disabled = true; $('settings-result').className = 'settings-result'; $('settings-result').textContent = '正在检测服务…';
-    try { const base = normalizeUrl($('service-url').value, true); const data = validStatus(await api('/api/status', {}, base)); $('settings-result').textContent = `服务可用 · 音箱${data.device.connected ? '已连接' : '未连接'} · 模型${data.model.connected ? '已连接' : '未连接'}`; }
+    try {
+      const base = normalizeUrl($('service-url').value) || localService;
+      const data = validStatus(await api('/api/status', {}, base));
+      const device = data.device.connected ? '音箱已连接' : data.device.checked === false ? '等待检测音箱' : '设备未连接';
+      const model = data.model.connected ? '模型已连接' : data.model.configured ? '模型已配置' : '模型未连接';
+      $('settings-result').textContent = `服务可用 · ${device} · ${model}`;
+    }
     catch (error) { $('settings-result').className = 'settings-result error'; $('settings-result').textContent = error.message; }
     finally { $('test-connection').disabled = false; }
   });
@@ -404,7 +748,7 @@
   $('start-camera').addEventListener('click', startCamera); $('camera-toggle').addEventListener('click', startCamera);
   $('camera-source').addEventListener('change', stopCamera); $('snapshot-button').addEventListener('click', takeSnapshot);
   $('fullscreen-button').addEventListener('click', async () => { try { if (document.fullscreenElement) await document.exitFullscreen(); else await $('video-stage').requestFullscreen(); } catch { toast('当前浏览器不支持全屏预览。'); } });
-  $('speak-answer').addEventListener('click', speakAnswer);
+  $('speak-answer').addEventListener('click', () => speakAnswer());
   $('copy-answer').addEventListener('click', async () => { if (!answer) return; try { await navigator.clipboard.writeText(answer); toast('回答已复制。'); } catch { toast('浏览器未允许自动复制，可以选中回答文字手动复制。'); } });
   $('export-button').addEventListener('click', () => {
     if (!$('transcript').value.trim() && !answer) { toast('当前对话还没有内容。'); return; }
@@ -424,8 +768,9 @@
     if (!editing && !event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === 'n' && !document.querySelector('dialog[open]')) { event.preventDefault(); newSession(); }
   });
   window.addEventListener('beforeunload', () => {
-    if (recording && config.mode === 'service' && config.serviceUrl) { try { fetch(endpoint('/api/recording/stop'), { method: 'POST', body: JSON.stringify({ discard: true }), headers: { 'Content-Type': 'application/json' }, keepalive: true }).catch(() => {}); } catch {} }
-    ++generation; requestController?.abort(); recognition?.abort(); eventSource?.close(); cameraStream?.getTracks().forEach((track) => track.stop()); window.speechSynthesis?.cancel();
+    discardServiceRecording();
+    stopSpeech();
+    ++generation; requestController?.abort(); recognition?.abort(); eventSource?.close(); cameraStream?.getTracks().forEach((track) => track.stop());
   });
 
   for (let index = 0; index < 65; index++) { const bar = document.createElement('span'); const height = 5 + Math.abs(Math.sin(index * 1.72) * Math.sin(index * .31)) * 30; bar.style.setProperty('--bar-height', `${height}px`); bar.style.setProperty('--bar-delay', `${-(index % 9) * .09}s`); $('waveform').append(bar); }

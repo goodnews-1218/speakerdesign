@@ -5,7 +5,8 @@
 新增前端位于 `frontend/`。双击 `frontend/start.cmd` 可启动本地服务并打开页面，
 也可运行 `python frontend/serve.py` 后访问 `http://127.0.0.1:4173`。
 页面展示摄像头画面、语音识别文字和模型回答，提供演示模式、历史记录及导出。
-真实音箱采集和大模型需要配套电脑端服务；接入方式见 [前端说明](frontend/README.md)。
+本地服务支持按语音或文字指令从音箱拍照、调用 DeepSeek 并播报结果。
+填写 API Key 和连接设备的步骤见 [前端说明](frontend/README.md#用语音描述眼前画面)。
 
 ## 原课程项目说明
 
