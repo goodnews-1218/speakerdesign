@@ -304,6 +304,33 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 except OSError:
                     pass
 
+    def stream_ring_preview(self, name, send_body):
+        frames = self.server.app.ring.preview_frames(name)
+        first = next(frames, None)
+        if first is None:
+            self.json_reply({"error": "当前没有实时画面。"}, 404, send_body)
+            return
+        self.close_connection = True
+        self.connection.settimeout(3)
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=connect-frame")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        if not send_body:
+            return
+        try:
+            frame = first
+            while frame is not None:
+                header = f"--connect-frame\r\nContent-Type: image/jpeg\r\nContent-Length: {len(frame)}\r\n\r\n"
+                self.wfile.write(header.encode("ascii"))
+                self.wfile.write(frame)
+                self.wfile.write(b"\r\n")
+                frame = next(frames, None)
+            self.wfile.write(b"--connect-frame--\r\n")
+        except OSError:
+            pass
+
     def read_body(self, maximum):
         try:
             count = int(self.headers.get("Content-Length", "0"))
@@ -351,6 +378,9 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 return
             if path == "/api/ring/status":
                 self.json_reply(app.ring.status(), send_body=send_body)
+                return
+            if path.startswith("/api/ring/preview/"):
+                self.stream_ring_preview(path.removeprefix("/api/ring/preview/"), send_body)
                 return
             if path.startswith("/api/ring/media/"):
                 entry = app.ring.media(path.removeprefix("/api/ring/media/"))

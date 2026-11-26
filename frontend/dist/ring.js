@@ -5,8 +5,10 @@
   const panel = $('ring-monitor');
   const form = $('ring-form');
   const demo = $('ring-demo-input');
+  const baselineMode = $('ring-baseline-mode');
   const baselineInput = $('ring-baseline-input');
   const preview = $('ring-preview');
+  const previewPulse = $('ring-preview-pulse');
   const video = $('ring-video');
   const stateLabels = {
     idle: '未启动',
@@ -75,6 +77,7 @@
   let pollController;
   let session = null;
   let previewSource = '';
+  let previewAttempt = 0;
   let eventSignature = '';
   let eventAnnouncements = new Map();
   let videoSignature = '';
@@ -115,8 +118,13 @@
     $('ring-start').disabled = actionPending || testingAlarm || isActive(state) || !status || !!connectionError;
     $('ring-stop').disabled = actionPending || !['starting', 'running'].includes(state);
     $('ring-test-alarm').disabled = actionPending || testingAlarm || isActive(state) || !status || !!connectionError;
-    baselineInput.disabled = actionPending || isActive(state);
-    demo.disabled = baselineInput.disabled;
+    const locked = actionPending || isActive(state);
+    const manual = baselineMode.value === 'manual';
+    baselineMode.disabled = locked;
+    $('ring-manual-baseline').hidden = !manual;
+    baselineInput.disabled = locked || !manual;
+    baselineInput.required = manual;
+    demo.disabled = locked;
     const message = actionError || connectionError || status?.error || '';
     const messageNode = $('ring-status-message');
     if (messageNode.textContent !== message) messageNode.textContent = message;
@@ -168,17 +176,16 @@
       if (collecting && !data.capture_error) alarm = ['等待抽帧和分析', 'warning'];
       detail = data.capture_error || '';
     } else if (latest) {
-      const current = episode ? events.filter(item => episodeNumber(item) === episode) : [latest];
-      const evaluated = current.find(item => item.alarm_reason !== 'already_alerted' && item.verdict !== 'already_alerted') || latest;
-      const played = current.some(item => item.alarm_played || item.alarm_state === 'played'
-        || item.alarm_reason === 'already_alerted' || item.verdict === 'already_alerted');
+      const stages = eventStages(latest);
+      const lastBatch = latest.batches?.at(-1);
       trigger = [episode ? `第 ${episode} 次心率预警` : '已确认心率预警', 'warning'];
-      capture = eventStages(latest).capture;
-      analysis = eventStages(evaluated).analysis;
-      alarm = played ? alarmLabels.played : eventStages(latest).alarm;
-      if (evaluated.verdict !== 'pending') {
-        const [verdict, tone] = verdicts[evaluated.verdict] || [];
-        detail = [verdict, evaluated.summary].filter(Boolean).join(' · ');
+      capture = stages.capture;
+      analysis = ['queued', 'requesting'].includes(lastBatch?.analysis_state)
+        ? eventStages(lastBatch).analysis : stages.analysis;
+      alarm = stages.alarm;
+      if (latest.verdict !== 'pending') {
+        const [verdict, tone] = verdicts[latest.verdict] || [];
+        detail = [verdict, latest.summary].filter(Boolean).join(' · ');
         detailTone = tone === 'danger' ? 'error' : '';
       }
     } else if (data.state === 'starting') {
@@ -219,29 +226,51 @@
     return /^\d+(?:\.\d+)?$/.test(text) ? text + ' BPM' : text;
   }
 
+  function renderPreviewPulse(data) {
+    const { bpm, pulse_state: pulseState, demo } = data;
+    const hasReading = Number.isFinite(bpm) && bpm > 0;
+    const live = hasReading && (pulseState === 'TRACKING' || pulseState === 'RECOVERED');
+    const note = !hasReading ? '等待读数' : {
+      RECOVERED: '估算读数',
+      HOLDING: '暂缓更新',
+      LAST_KNOWN: '历史读数',
+    }[pulseState] || '';
+    $('ring-preview-bpm').textContent = hasReading ? String(Math.round(bpm)) : '—';
+    $('ring-preview-pulse-note').textContent = [note, demo ? '演示' : ''].filter(Boolean).join(' · ');
+    previewPulse.dataset.live = String(live);
+    if (live) previewPulse.style.setProperty('--beat-duration', `${60 / bpm}s`);
+    previewPulse.hidden = false;
+  }
+
   function renderPreview(data) {
-    const source = mediaUrl(data.preview_url);
+    const source = panel.hidden || document.hidden ? '' : mediaUrl(data?.preview_url);
     const stateText = $('ring-preview-state');
-    stateText.textContent = source ? (isActive(data.state) ? '定时刷新' : '最后一帧') : '暂无画面';
-    if (source === previewSource) return;
+    if (source) renderPreviewPulse(data);
+    else previewPulse.hidden = true;
+    if (source && source === previewSource) return;
     previewSource = source;
     if (source) {
-      preview.src = source;
+      stateText.textContent = '实时预览';
+      preview.hidden = false;
+      $('ring-preview-empty').hidden = true;
+      preview.src = source + (source.includes('?') ? '&' : '?') + 'attempt=' + ++previewAttempt;
       return;
     }
     preview.removeAttribute('src');
     preview.hidden = true;
     $('ring-preview-empty').hidden = false;
+    if (data?.state === 'starting') stateText.textContent = '正在连接音箱';
+    else if (data?.state === 'running') stateText.textContent = '等待摄像头画面';
+    else stateText.textContent = '暂无画面';
   }
 
-  preview.addEventListener('load', () => {
-    preview.hidden = false;
-    $('ring-preview-empty').hidden = true;
-  });
   preview.addEventListener('error', () => {
+    if (!previewSource) return;
+    previewSource = '';
     preview.hidden = true;
+    previewPulse.hidden = true;
     $('ring-preview-empty').hidden = false;
-    $('ring-preview-state').textContent = '等待下一帧';
+    $('ring-preview-state').textContent = '正在重连画面';
   });
 
   function frameTime(value) {
@@ -250,32 +279,20 @@
     return (value < 0 ? '预警前 ' : '预警后 ') + (Math.abs(value) / 1000).toFixed(1) + ' 秒';
   }
 
-  function renderEvent(item, expanded) {
+  function renderEvent(item, expanded, defaultOpen) {
     const [verdict, tone] = verdicts[item.verdict] || ['等待确认', 'pending'];
     const event = element('details', 'ring-event');
     event.dataset.eventId = String(item.id);
-    event.open = expanded;
+    event.open = expanded.get(String(item.id)) ?? defaultOpen;
     const header = element('summary', 'ring-event-heading');
-    const id = /^(?:event-)?(\d+)(?:-(\d+))?$/.exec(String(item.id));
-    const title = id ? '预警 ' + id[1] + (id[2] ? ' · 第 ' + Number(id[2]) + ' 组' : '') : '心率预警';
+    const episode = episodeNumber(item);
+    const title = episode ? '预警 ' + episode : '心率预警';
     header.append(
       element('span', 'ring-event-name', title),
       element('span', 'ring-badge ring-verdict ' + tone, verdict),
     );
     const body = element('div', 'ring-event-body');
-    const timestamp = item.created_at ? new Date(item.created_at) : null;
-    if (timestamp && !Number.isNaN(timestamp.getTime())) {
-      const time = element('time', 'ring-event-meta', timestamp.toLocaleString());
-      time.dateTime = timestamp.toISOString();
-      body.append(time);
-    }
-    if (item.summary) body.append(element('p', 'ring-event-summary', item.summary));
-    const { capture, analysis, alarm } = eventStages(item);
-    const stages = element('dl', 'ring-event-stages');
-    for (const [label, value] of [['抽帧', capture], ['DeepSeek', analysis], ['警报声', alarm]]) {
-      stages.append(element('dt', '', label), element('dd', '', value[0]));
-    }
-    body.append(stages);
+    appendEventResult(body, item);
     const frames = element('div', 'ring-frames');
     for (const frame of item.frames || []) {
       const source = mediaUrl(frame.url);
@@ -289,12 +306,46 @@
       image.src = source;
       image.alt = '预警抽帧，' + time;
       image.loading = 'lazy';
-      link.append(image, element('span', '', time));
+      const label = element('span', 'ring-frame-time', time);
+      if (Number.isFinite(frame.time_ms)) {
+        label.dataset.phase = frame.time_ms < 0 ? 'before' : frame.time_ms > 0 ? 'after' : 'at';
+      }
+      link.append(image, label);
       frames.append(link);
     }
     if (frames.childElementCount) body.append(frames);
+    if (item.batches?.length > 1) {
+      for (const batch of item.batches) {
+        const detail = element('details', 'ring-event-batch');
+        detail.dataset.eventId = String(batch.id);
+        detail.open = expanded.get(String(batch.id)) ?? false;
+        const batchNumber = /^event-\d+-(\d+)$/.exec(String(batch.id))?.[1];
+        const label = verdicts[batch.verdict]?.[0] || '等待确认';
+        const title = batchNumber ? `第 ${batchNumber} 组 · ${label}` : label;
+        const result = element('div', 'ring-event-body');
+        appendEventResult(result, batch);
+        detail.append(element('summary', '', title), result);
+        body.append(detail);
+      }
+    }
     event.append(header, body);
     return event;
+  }
+
+  function appendEventResult(body, item) {
+    const timestamp = item.created_at ? new Date(item.created_at) : null;
+    if (timestamp && !Number.isNaN(timestamp.getTime())) {
+      const time = element('time', 'ring-event-meta', timestamp.toLocaleString());
+      time.dateTime = timestamp.toISOString();
+      body.append(time);
+    }
+    if (item.summary) body.append(element('p', 'ring-event-summary', item.summary));
+    const { capture, analysis, alarm } = eventStages(item);
+    const stages = element('dl', 'ring-event-stages');
+    for (const [label, value] of [['抽帧', capture], ['DeepSeek', analysis], ['警报声', alarm]]) {
+      stages.append(element('dt', '', label), element('dd', '', value[0]));
+    }
+    body.append(stages);
   }
 
   function renderEvents(data) {
@@ -310,11 +361,12 @@
     if (empty.textContent !== emptyText) empty.textContent = emptyText;
     if (signature === eventSignature) return;
     const list = $('ring-events');
-    const expanded = new Map([...list.children].map((event) => [event.dataset.eventId, event.open]));
+    const expanded = new Map([...list.querySelectorAll('details[data-event-id]')]
+      .map((event) => [event.dataset.eventId, event.open]));
     const latest = items.find((item) => eventAnnouncements.get(String(item.id)) !== item.verdict);
     eventAnnouncements = new Map(items.map((item) => [String(item.id), item.verdict]));
     if (latest) $('ring-event-update').textContent = '心率预警更新。' + (verdicts[latest.verdict]?.[0] || '等待确认') + '。';
-    list.replaceChildren(...items.map((item, index) => renderEvent(item, expanded.get(String(item.id)) ?? index === 0)));
+    list.replaceChildren(...items.map((item, index) => renderEvent(item, expanded, index === 0)));
     eventSignature = signature;
   }
 
@@ -456,6 +508,7 @@
       connectionError = '无法连接戒指服务。请用 start.cmd 启动本地页面，服务恢复后会自动刷新。';
       renderState('error', '连接异常');
       renderDiagnostic(status);
+      renderPreview(null);
       updateControls();
     } finally {
       if (pollController === controller) {
@@ -506,9 +559,7 @@
   }
 
   function normalizeBaseline(value) {
-    const text = value.trim().toLowerCase();
-    if (!text || text === 'auto') return 'auto';
-    const match = /^(\d{1,3}(?:\.\d{1,2})?)(?:\s*[:：\-–—~～]\s*(\d{1,3}(?:\.\d{1,2})?))?$/.exec(text);
+    const match = /^(\d{1,3}(?:\.\d{1,2})?)(?:\s*[:：\-–—~～]\s*(\d{1,3}(?:\.\d{1,2})?))?$/.exec(value.trim());
     if (!match) return '';
     const lower = Number(match[1]);
     const upper = match[2] == null ? lower : Number(match[2]);
@@ -518,13 +569,18 @@
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    const value = normalizeBaseline(baselineInput.value);
-    if (!value) {
-      baselineInput.setCustomValidity('请输入 auto、35–220 之间的数值，或从低到高的区间，例如 65:85。');
+    const baseline = baselineMode.value === 'manual' ? normalizeBaseline(baselineInput.value) : 'auto';
+    if (!baseline) {
+      baselineInput.setCustomValidity('请输入 35–220 BPM 之间的数值或从低到高的范围，例如 65:85。');
       baselineInput.reportValidity();
       return;
     }
-    performAction('start', { baseline: value, demo: demo.checked });
+    performAction('start', { baseline, demo: demo.checked });
+  });
+  baselineMode.addEventListener('change', () => {
+    baselineInput.setCustomValidity('');
+    updateControls();
+    if (baselineMode.value === 'manual') baselineInput.focus();
   });
   baselineInput.addEventListener('input', () => baselineInput.setCustomValidity(''));
   demo.addEventListener('change', () => {
@@ -567,6 +623,7 @@
       if (focusTitle) $('ring-title').focus({ preventScroll: true });
     } else {
       cancelPoll();
+      renderPreview(null);
     }
   }
 
@@ -585,8 +642,10 @@
   }, { capture: true });
   window.addEventListener('hashchange', () => showView(location.hash === ringHash));
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) cancelPoll();
-    else schedulePoll(0);
+    if (document.hidden) {
+      cancelPoll();
+      renderPreview(null);
+    } else schedulePoll(0);
   });
   showView(location.hash === ringHash);
 })();

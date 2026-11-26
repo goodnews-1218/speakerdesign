@@ -24,13 +24,15 @@ class RingWebStatusTests(unittest.TestCase):
         return RingMonitorSession(self.recordings / "connect_lab.exe", [], self.recordings,
                                   Mock(), self.device_lock, Mock())
 
-    def event(self, result=None, capture="ready"):
-        event = self.recordings / "session-200" / "fall-alerts" / "event-1-1"
+    def event(self, result=None, capture="ready", *, batch=1, times=()):
+        event = self.recordings / "session-200" / "fall-alerts" / f"event-1-{batch}"
         event.mkdir(parents=True, exist_ok=True)
-        (event / "ready").write_text(json.dumps({"version": 1, "demo": False, "episode": 1,
-                                               "status": capture, "times_ms": []}), encoding="utf-8")
+        (event / "ready").write_text(json.dumps({"version": 1, "demo": False, "episode": 1, "batch": batch,
+                                               "status": capture, "times_ms": times}), encoding="utf-8")
         if result is not None:
             (event / "analysis.json").write_text(json.dumps(result), encoding="utf-8")
+        for index in range(len(times)):
+            (event / f"frame-{index:03}.jpg").touch()
         return event
 
     def test_alert_survives_restart_without_final_video(self):
@@ -58,6 +60,20 @@ class RingWebStatusTests(unittest.TestCase):
         item = self.app().status()["events"][0]
         self.assertEqual((item["analysis_state"], item["alarm_state"], item["alarm_played"]),
                          ("received", "failed", False))
+
+    def test_episode_groups_frames_while_retaining_each_batch_status(self):
+        self.event({"verdict": "suspected_fall", "summary": "Visible fall", "analysis_state": "received",
+                    "alarm_state": "played"}, times=(-1000, 0))
+        self.event({"verdict": "already_alerted", "analysis_state": "skipped", "alarm_state": "skipped",
+                    "alarm_reason": "already_alerted"}, batch=2, times=(0, 1000))
+        status = self.app().status()
+        self.assertEqual(status["warning_count"], 1)
+        self.assertEqual(len(status["events"]), 1)
+        item = status["events"][0]
+        self.assertEqual((item["id"], item["verdict"], item["alarm_state"]),
+                         ("event-1", "suspected_fall", "played"))
+        self.assertEqual([frame["time_ms"] for frame in item["frames"]], [-1000, 0, 1000])
+        self.assertEqual({batch["analysis_state"] for batch in item["batches"]}, {"received", "skipped"})
 
     @patch("ring_web.play_alarm")
     def test_audition_is_local_and_releases_device_after_failure(self, play_alarm):

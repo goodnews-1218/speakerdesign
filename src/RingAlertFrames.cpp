@@ -19,6 +19,7 @@ namespace {
 using namespace std::chrono_literals;
 constexpr auto historyLength = 72s; // The configurable heart-rate hold can be as long as 60 seconds.
 constexpr auto samplePeriod = 1s;
+constexpr auto previewPeriod = 80ms;
 constexpr auto followupInterval = 7s;
 
 void reportError(const std::exception& error) {
@@ -39,7 +40,10 @@ void RingAlertFrames::sample(Time captured, const std::vector<uint8_t>& bgr,
     if (!width || !height || bgr.size() != size_t(width) * height * 3) return;
     try {
         std::lock_guard lock(mutex_);
-        if (stopped_ || (!recent_.empty() && captured - recent_.back()->captured < samplePeriod)) return;
+        if (stopped_) return;
+        const bool takeEvidence = recent_.empty() || captured - recent_.back()->captured >= samplePeriod;
+        const bool takePreview = preview_ && (!lastPreview_ || captured - *lastPreview_ >= previewPeriod);
+        if (!takeEvidence && !takePreview) return;
         auto sample = std::make_shared<Sample>();
         sample->captured = captured;
         const auto step = (std::max(width, height) + 639) / 640;
@@ -53,9 +57,12 @@ void RingAlertFrames::sample(Time captured, const std::vector<uint8_t>& bgr,
                 std::memcpy(sample->bgr.data() + destination, bgr.data() + source, 3);
             }
         }
-        recent_.push_back(sample);
-        while (captured - recent_.front()->captured > historyLength) recent_.pop_front();
-        if (preview_) {
+        if (takeEvidence) {
+            recent_.push_back(sample);
+            while (captured - recent_.front()->captured > historyLength) recent_.pop_front();
+        }
+        if (takePreview) {
+            lastPreview_ = captured;
             nextPreview_ = std::move(sample);
             ready_.notify_one();
         }

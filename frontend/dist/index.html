@@ -151,6 +151,12 @@
                 <span>启动监测后显示音箱摄像头画面</span>
               </p>
               <img id="ring-preview" alt="音箱摄像头的最新监测画面" hidden>
+              <div id="ring-preview-pulse" class="ring-preview-pulse" aria-hidden="true" hidden>
+                <span class="ring-preview-heart">♥</span>
+                <span id="ring-preview-bpm" class="ring-preview-bpm">—</span>
+                <span class="ring-preview-unit">BPM</span>
+                <span id="ring-preview-pulse-note" class="ring-preview-pulse-note"></span>
+              </div>
             </div>
           </section>
 
@@ -173,12 +179,20 @@
             <form id="ring-form" class="ring-form">
               <div class="ring-form-row">
                 <div class="ring-form-field">
-                  <label for="ring-baseline-input">心率基线</label>
-                  <input id="ring-baseline-input" type="text" value="auto" maxlength="20" autocomplete="off" aria-describedby="ring-baseline-help">
+                  <label for="ring-baseline-mode">心率基线</label>
+                  <select id="ring-baseline-mode">
+                    <option value="auto">自动校准（Auto）</option>
+                    <option value="manual">手动输入</option>
+                  </select>
                 </div>
                 <label class="ring-check"><input id="ring-demo-input" type="checkbox">模拟心率</label>
               </div>
-              <p id="ring-baseline-help" class="ring-help">使用 auto 自动校准，也可输入个人基线，如 75 或 65:85。</p>
+              <div id="ring-manual-baseline" class="ring-form-field ring-manual-baseline" hidden>
+                <label for="ring-baseline-input">手动基线（BPM）</label>
+                <input id="ring-baseline-input" type="text" maxlength="20" autocomplete="off"
+                  placeholder="例如 75 或 65:85" aria-describedby="ring-baseline-help" disabled>
+                <p id="ring-baseline-help" class="ring-help">输入 35–220 BPM 内的单值或范围。</p>
+              </div>
               <p class="ring-help" id="ring-start-help">启动 BioScope 并连接戒指。确认心率预警后会抽帧分析，画面支持疑似跌倒时才会响铃。</p>
               <div class="ring-actions">
                 <button id="ring-start" type="submit" class="primary-button" disabled>开始监测</button>

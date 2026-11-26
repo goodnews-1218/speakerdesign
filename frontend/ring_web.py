@@ -2,11 +2,12 @@
 
 from datetime import datetime, timezone
 import json
+from os import fstat
 from pathlib import Path
 import re
 import shutil
 from threading import Event, Lock, Thread
-from time import time
+from time import monotonic, sleep, time
 
 from deepseek import APIError
 from fall_vision import MAX_FRAMES
@@ -23,6 +24,9 @@ EVENT_VERDICTS = {"suspected_fall", "no_visible_fall", "uncertain", "error", "de
                   "already_alerted", "cancelled"}
 ANALYSIS_STATES = {"queued", "requesting", "received", "failed", "skipped", "unknown"}
 ALARM_STATES = {"pending", "playing", "played", "failed", "skipped", "unknown"}
+# Keep a confirmed suspicion visible even if a later batch is skipped or inconclusive.
+VERDICT_PRIORITY = ("already_alerted", "cancelled", "pending", "no_visible_fall", "demo",
+                    "error", "uncertain", "suspected_fall")
 PULSE_LINES = {
     "RING_BPM", "RING_DEMO_BPM", "RING_RECOVERED_BPM", "RING_HELD_BPM", "RING_LAST_BPM",
 }
@@ -114,16 +118,16 @@ def list_events(session, active):
                 directories.append((int(match[1]), int(match[2]), entry.name))
     except OSError:
         return [], 0, False
-    events = []
+    events = {}
     episodes = set()
     demo = False
-    for episode, _, event_id in sorted(directories, reverse=True):
+    for episode, _, event_id in sorted(directories, key=lambda item: (-item[0], item[1])):
         relative = f"fall-alerts/{event_id}"
         marker = regular_file(session, f"{relative}/ready")
         if not marker:
             continue
         episodes.add(episode)
-        if len(events) == 24:
+        if episode not in events and len(events) == 24:
             continue
         try:
             job = load_event(marker)
@@ -148,18 +152,30 @@ def list_events(session, active):
         elif capture == "insufficient" and not summary:
             summary = "可用画面不足，无法分析。"
         summary = summary[:300] if isinstance(summary, str) else ""
-        frames = []
+        alarm_reason = result.get("alarm_reason")
+        states = {"verdict": verdict, "summary": summary, "capture_state": capture,
+                  "analysis_state": analysis, "alarm_state": alarm,
+                  "alarm_reason": alarm_reason if isinstance(alarm_reason, str) else None}
+        event = events.setdefault(episode, {"id": f"event-{episode}", "created_at": created_at,
+                                           "alarm_played": False, "frames": {}, "batches": []})
+        if "verdict" not in event or VERDICT_PRIORITY.index(verdict) >= VERDICT_PRIORITY.index(event["verdict"]):
+            event.update(states)
+        event["alarm_played"] |= alarm == "played" or verdict == "already_alerted"
+        frame_count = 0
         times = job.get("times_ms")
         for index, timestamp in enumerate(times[:MAX_FRAMES] if isinstance(times, list) else []):
             frame = f"{relative}/frame-{index:03}.jpg"
             if type(timestamp) is int and regular_file(session, frame):
-                frames.append({"url": media_url(session, frame), "time_ms": timestamp})
-        alarm_reason = result.get("alarm_reason")
-        events.append({"id": event_id, "verdict": verdict, "summary": summary, "created_at": created_at,
-                       "capture_state": capture, "analysis_state": analysis, "alarm_state": alarm,
-                       "alarm_reason": alarm_reason if isinstance(alarm_reason, str) else None,
-                       "alarm_played": alarm == "played", "frames": frames})
-    return events, len(episodes), demo
+                frame_count += 1
+                event["frames"].setdefault(timestamp, {"url": media_url(session, frame),
+                                                       "time_ms": timestamp})
+        event["batches"].append({"id": event_id, "created_at": created_at, "frame_count": frame_count,
+                                 "alarm_played": alarm == "played", **states})
+    for event in events.values():
+        event["frames"] = [frame for _, frame in sorted(event["frames"].items())]
+        if event["alarm_played"]:
+            event.update(alarm_state="played", alarm_reason=None)
+    return list(events.values()), len(episodes), demo
 
 
 def list_videos(session):
@@ -226,8 +242,8 @@ class RingMonitorSession:
                      "preview_url": None, "events": [], "videos": []}
         if session:
             reply["events"], saved_warnings, saved_demo = list_events(session, reply["state"] in ACTIVE_STATES)
-            saved_results = {item["id"] for item in reply["events"]
-                             if item["verdict"] not in ("pending", "cancelled") and item["alarm_state"] != "playing"}
+            saved_results = {batch["id"] for item in reply["events"] for batch in item["batches"]
+                             if batch["verdict"] not in ("pending", "cancelled") and batch["alarm_state"] != "playing"}
             if not reply["error"] and save_errors - saved_results:
                 reply["error"] = "部分预警结果未能写入录像目录。请查看启动窗口中的 RING_ALERT_RESULT。"
             reply["warning_count"] = max(reply["warning_count"], saved_warnings)
@@ -238,10 +254,32 @@ class RingMonitorSession:
                 try:
                     modified = preview.stat()
                     if time() - modified.st_mtime < 6:
-                        reply["preview_url"] = f"{media_url(session, PREVIEW)}?frame={modified.st_mtime_ns}"
+                        reply["preview_url"] = f"/api/ring/preview/{session.name}"
                 except OSError:
                     pass
         return reply
+
+    def preview_frames(self, name):
+        last_stamp = None
+        last_update = monotonic()
+        while monotonic() - last_update < 5:
+            with self.lock:
+                session = self.session
+                if self.closed or self.state != "running" or not session or session.name != name:
+                    return
+            path = regular_file(session, PREVIEW)
+            if path is not None:
+                try:
+                    with path.open("rb") as source:
+                        stamp = fstat(source.fileno()).st_mtime_ns
+                        frame = source.read(512 * 1024 + 1) if stamp != last_stamp else b""
+                    if frame.startswith(b"\xff\xd8") and frame.endswith(b"\xff\xd9") and len(frame) <= 512 * 1024:
+                        last_stamp = stamp
+                        last_update = monotonic()
+                        yield frame
+                except OSError:
+                    pass
+            sleep(0.04)
 
     def start(self, payload):
         baseline = validate_baseline(payload.get("baseline", "auto"))
@@ -335,6 +373,8 @@ class RingMonitorSession:
                 self.error = "戒指数据读取失败，请检查 BioScope 是否正在采集。"
             elif "Unknown option" in line and "--fall-alert-preview" in line:
                 self.error = "当前录像程序不支持网页预览，请重新编译 Windows Release 版。"
+            elif line.startswith("LAB_ERROR:") and ("Connection timeout" in line or "OPEN_ERROR=" in line):
+                self.error = "音箱连接失败。请确认 USB 已连接，并从可正常录制的 Windows PowerShell 窗口重启网页后端。"
             elif key in ("OPEN_ERROR", "CREATE_ERROR", "VIDEO_EXPORT_ERROR") or line.startswith((
                     "LAB_ERROR:", "OUTPUT_ERROR:", "VIDEO_ERROR:", "VIDEO_EXPORT_ERROR:")
             ):
