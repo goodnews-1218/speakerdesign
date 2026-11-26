@@ -46,6 +46,7 @@ private:
     std::deque<std::shared_ptr<Sample>> recent_;
     std::deque<Batch> batches_;
     std::shared_ptr<Sample> nextPreview_;
+    std::optional<Time> lastPreview_;
     std::optional<Time> confirmed_;
     Time lastEnd_{};
     unsigned episode_ = 0, batch_ = 0;

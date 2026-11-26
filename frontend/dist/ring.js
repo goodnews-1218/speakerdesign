@@ -5,8 +5,10 @@
   const panel = $('ring-monitor');
   const form = $('ring-form');
   const demo = $('ring-demo-input');
+  const baselineMode = $('ring-baseline-mode');
   const baselineInput = $('ring-baseline-input');
   const preview = $('ring-preview');
+  const previewPulse = $('ring-preview-pulse');
   const video = $('ring-video');
   const stateLabels = {
     idle: '未启动',
@@ -43,6 +45,7 @@
   let pollController;
   let session = null;
   let previewSource = '';
+  let previewAttempt = 0;
   let eventSignature = '';
   let eventAnnouncements = new Map();
   let videoSignature = '';
@@ -82,8 +85,13 @@
     const state = status?.state;
     $('ring-start').disabled = actionPending || isActive(state) || !status || !!connectionError;
     $('ring-stop').disabled = actionPending || !['starting', 'running'].includes(state);
-    baselineInput.disabled = actionPending || isActive(state);
-    demo.disabled = baselineInput.disabled;
+    const locked = actionPending || isActive(state);
+    const manual = baselineMode.value === 'manual';
+    baselineMode.disabled = locked;
+    $('ring-manual-baseline').hidden = !manual;
+    baselineInput.disabled = locked || !manual;
+    baselineInput.required = manual;
+    demo.disabled = locked;
     const message = actionError || connectionError || status?.error || '';
     const messageNode = $('ring-status-message');
     if (messageNode.textContent !== message) messageNode.textContent = message;
@@ -101,29 +109,51 @@
     return /^\d+(?:\.\d+)?$/.test(text) ? text + ' BPM' : text;
   }
 
+  function renderPreviewPulse(data) {
+    const { bpm, pulse_state: pulseState, demo } = data;
+    const hasReading = Number.isFinite(bpm) && bpm > 0;
+    const live = hasReading && (pulseState === 'TRACKING' || pulseState === 'RECOVERED');
+    const note = !hasReading ? '等待读数' : {
+      RECOVERED: '估算读数',
+      HOLDING: '暂缓更新',
+      LAST_KNOWN: '历史读数',
+    }[pulseState] || '';
+    $('ring-preview-bpm').textContent = hasReading ? String(Math.round(bpm)) : '—';
+    $('ring-preview-pulse-note').textContent = [note, demo ? '演示' : ''].filter(Boolean).join(' · ');
+    previewPulse.dataset.live = String(live);
+    if (live) previewPulse.style.setProperty('--beat-duration', `${60 / bpm}s`);
+    previewPulse.hidden = false;
+  }
+
   function renderPreview(data) {
-    const source = mediaUrl(data.preview_url);
+    const source = panel.hidden || document.hidden ? '' : mediaUrl(data?.preview_url);
     const stateText = $('ring-preview-state');
-    stateText.textContent = source ? (isActive(data.state) ? '定时刷新' : '最后一帧') : '暂无画面';
-    if (source === previewSource) return;
+    if (source) renderPreviewPulse(data);
+    else previewPulse.hidden = true;
+    if (source && source === previewSource) return;
     previewSource = source;
     if (source) {
-      preview.src = source;
+      stateText.textContent = '实时预览';
+      preview.hidden = false;
+      $('ring-preview-empty').hidden = true;
+      preview.src = source + '?attempt=' + ++previewAttempt;
       return;
     }
     preview.removeAttribute('src');
     preview.hidden = true;
     $('ring-preview-empty').hidden = false;
+    if (data?.state === 'starting') stateText.textContent = '正在连接音箱';
+    else if (data?.state === 'running') stateText.textContent = '等待摄像头画面';
+    else stateText.textContent = '暂无画面';
   }
 
-  preview.addEventListener('load', () => {
-    preview.hidden = false;
-    $('ring-preview-empty').hidden = true;
-  });
   preview.addEventListener('error', () => {
+    if (!previewSource) return;
+    previewSource = '';
     preview.hidden = true;
+    previewPulse.hidden = true;
     $('ring-preview-empty').hidden = false;
-    $('ring-preview-state').textContent = '等待下一帧';
+    $('ring-preview-state').textContent = '正在重连画面';
   });
 
   function frameTime(value) {
@@ -138,8 +168,8 @@
     event.dataset.eventId = String(item.id);
     event.open = expanded;
     const header = element('summary', 'ring-event-heading');
-    const id = /^(?:event-)?(\d+)(?:-(\d+))?$/.exec(String(item.id));
-    const title = id ? '预警 ' + id[1] + (id[2] ? ' · 第 ' + Number(id[2]) + ' 组' : '') : '心率预警';
+    const id = /^event-(\d+)$/.exec(String(item.id));
+    const title = id ? '预警 ' + id[1] : '心率预警';
     header.append(
       element('span', 'ring-event-name', title),
       element('span', 'ring-badge ring-verdict ' + tone, verdict),
@@ -168,7 +198,11 @@
       image.src = source;
       image.alt = '预警抽帧，' + time;
       image.loading = 'lazy';
-      link.append(image, element('span', '', time));
+      const label = element('span', 'ring-frame-time', time);
+      if (Number.isFinite(frame.time_ms)) {
+        label.dataset.phase = frame.time_ms < 0 ? 'before' : frame.time_ms > 0 ? 'after' : 'at';
+      }
+      link.append(image, label);
       frames.append(link);
     }
     if (frames.childElementCount) body.append(frames);
@@ -332,6 +366,7 @@
       if (pollController !== controller) return;
       connectionError = '无法连接戒指服务。请用 start.cmd 启动本地页面，服务恢复后会自动刷新。';
       renderState('error', '连接异常');
+      renderPreview(null);
       updateControls();
     } finally {
       if (pollController === controller) {
@@ -360,28 +395,15 @@
     }
   }
 
-  function normalizeBaseline(value) {
-    const text = value.trim().toLowerCase();
-    if (!text || text === 'auto') return 'auto';
-    const match = /^(\d{1,3}(?:\.\d{1,2})?)(?:\s*[:：\-–—~～]\s*(\d{1,3}(?:\.\d{1,2})?))?$/.exec(text);
-    if (!match) return '';
-    const lower = Number(match[1]);
-    const upper = match[2] == null ? lower : Number(match[2]);
-    if (lower < 35 || upper > 220 || upper < lower) return '';
-    return match[2] ? lower + ':' + upper : String(lower);
-  }
-
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    const value = normalizeBaseline(baselineInput.value);
-    if (!value) {
-      baselineInput.setCustomValidity('请输入 auto、35–220 之间的数值，或从低到高的区间，例如 65:85。');
-      baselineInput.reportValidity();
-      return;
-    }
-    performAction('start', { baseline: value, demo: demo.checked });
+    const baseline = baselineMode.value === 'manual' ? String(baselineInput.valueAsNumber) : 'auto';
+    performAction('start', { baseline, demo: demo.checked });
   });
-  baselineInput.addEventListener('input', () => baselineInput.setCustomValidity(''));
+  baselineMode.addEventListener('change', () => {
+    updateControls();
+    if (baselineMode.value === 'manual') baselineInput.focus();
+  });
   demo.addEventListener('change', () => {
     $('ring-start-help').textContent = demo.checked
       ? '使用模拟心率和真实摄像头画面，抽帧保存在本机。'
@@ -416,6 +438,7 @@
       if (focusTitle) $('ring-title').focus({ preventScroll: true });
     } else {
       cancelPoll();
+      renderPreview(null);
     }
   }
 
@@ -434,8 +457,10 @@
   }, { capture: true });
   window.addEventListener('hashchange', () => showView(location.hash === ringHash));
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) cancelPoll();
-    else schedulePoll(0);
+    if (document.hidden) {
+      cancelPoll();
+      renderPreview(null);
+    } else schedulePoll(0);
   });
   showView(location.hash === ringHash);
 })();
