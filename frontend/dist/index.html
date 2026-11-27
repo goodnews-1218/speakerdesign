@@ -15,6 +15,7 @@
 <body>
   <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
     <symbol id="i-wave" viewBox="0 0 24 24"><path d="M3 10v4m4-8v12m5-16v20m5-16v12m4-8v4"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M20.8 9c0 4.2-8.8 10-8.8 10S3.2 13.2 3.2 9a4.5 4.5 0 0 1 8.8-1.3A4.5 4.5 0 0 1 20.8 9Z"/></symbol>
     <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2v-10A9 9 0 0 1 20 11.5Z"/><path d="M7 10h8M7 14h5"/></symbol>
@@ -60,7 +61,7 @@
     </nav>
     <main>
       <div id="conversation-view">
-      <section class="page-heading"><div><p class="eyebrow">SEE. LISTEN. UNDERSTAND.</p><h1>让对话，自然发生<span class="heading-dot">。</span></h1><p class="page-description">看见音箱的视角，听见你的想法，让 AI 接住每一句话。</p></div><button class="outline-button" id="export-button"><svg class="icon"><use href="#i-download"/></svg>导出对话</button></section>
+      <section class="page-heading"><div><h1>对话工作台</h1><p class="page-description">通过音箱或电脑麦克风提问，也可以让 DeepSeek 描述当前画面。</p></div><button class="outline-button" id="export-button"><svg class="icon"><use href="#i-download"/></svg>导出对话</button></section>
       <section class="mode-banner" aria-label="当前工作模式"><div><span class="demo-icon"><svg class="icon"><use href="#i-spark"/></svg></span><div><strong id="mode-title">先体验，再连接</strong><span id="mode-description">当前为演示模式，示例内容不来自音箱或大模型。</span></div></div><button id="demo-button">播放对话演示<svg class="icon"><use href="#i-play"/></svg></button></section>
 
       <div class="workspace-grid">
@@ -107,34 +108,10 @@
         <header class="ring-header">
           <div>
             <h1 id="ring-title" tabindex="-1">戒指预警</h1>
-            <p>监测心率偏离，结合现场画面提示疑似跌倒。</p>
+            <p>实时查看心率和现场画面，跟进预警与语音确认。</p>
           </div>
           <span class="ring-badge" id="ring-state" role="status">尚未启动</span>
         </header>
-
-        <section class="panel ring-diagnostic" aria-labelledby="ring-diagnostic-title">
-          <header class="panel-header">
-            <div class="panel-title">
-              <svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg>
-              <h2 id="ring-diagnostic-title">预警进度</h2>
-            </div>
-            <button id="ring-test-alarm" type="button" class="outline-button" aria-describedby="ring-audio-output" disabled>
-              <svg class="icon" aria-hidden="true"><use href="#i-volume"/></svg>试听警报
-            </button>
-          </header>
-          <p class="ring-diagnostic-trigger" id="ring-trigger-state" role="status">正在连接本机服务</p>
-          <dl class="ring-diagnostic-steps" aria-live="polite" aria-atomic="true">
-            <div><dt>抽帧</dt><dd id="ring-capture-state">等待心率预警</dd></div>
-            <div><dt>DeepSeek</dt><dd id="ring-analysis-state">未提交</dd></div>
-            <div><dt>警报声</dt><dd id="ring-alarm-state">未触发</dd></div>
-          </dl>
-          <div class="ring-diagnostic-review" id="ring-diagnostic-review" hidden>
-            <p class="ring-help ring-diagnostic-detail" id="ring-diagnostic-detail" role="status" hidden></p>
-            <button id="ring-view-events" type="button" class="text-button" aria-controls="ring-events" hidden>查看预警记录</button>
-          </div>
-          <p class="ring-help ring-diagnostic-note" id="ring-audio-output">警报使用 Windows 默认声音输出。实际能否听到，可点「试听警报」确认。</p>
-          <p class="ring-help ring-diagnostic-note" id="ring-test-alarm-result" role="status" hidden></p>
-        </section>
 
         <div class="ring-layout">
           <section class="panel ring-preview-panel" aria-labelledby="ring-preview-title">
@@ -152,7 +129,7 @@
               </p>
               <img id="ring-preview" alt="音箱摄像头的最新监测画面" hidden>
               <div id="ring-preview-pulse" class="ring-preview-pulse" aria-hidden="true" hidden>
-                <span class="ring-preview-heart">♥</span>
+                <svg class="icon ring-preview-heart"><use href="#i-heart"/></svg>
                 <span id="ring-preview-bpm" class="ring-preview-bpm">—</span>
                 <span class="ring-preview-unit">BPM</span>
                 <span id="ring-preview-pulse-note" class="ring-preview-pulse-note"></span>
@@ -196,10 +173,11 @@
               <div id="ring-demo-analysis-option" class="ring-demo-analysis" hidden>
                 <label class="ring-check">
                   <input id="ring-demo-analysis" type="checkbox" aria-describedby="ring-start-help" disabled>
-                  用 DeepSeek 分析模拟预警
+                  测试完整预警流程
                 </label>
               </div>
-              <p class="ring-help" id="ring-start-help">启动 BioScope 并连接戒指。确认心率预警后会抽帧分析，画面支持疑似跌倒时才会响铃。</p>
+              <p class="ring-help" id="ring-start-help">启动 BioScope 并连接戒指。预警画面及语音确认片段会发送给 DeepSeek。</p>
+              <p class="ring-help">有效心率达到基线边界的 20% 偏离并持续 6 秒，即触发预警。</p>
               <div class="ring-actions">
                 <button id="ring-start" type="submit" class="primary-button" disabled>开始监测</button>
                 <button id="ring-stop" type="button" class="outline-button" disabled>停止监测</button>
@@ -208,6 +186,31 @@
             <p id="ring-status-message" class="ring-status-message" role="status" hidden></p>
           </section>
         </div>
+
+        <section class="panel ring-diagnostic" aria-labelledby="ring-diagnostic-title">
+          <header class="panel-header">
+            <div class="panel-title">
+              <svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg>
+              <h2 id="ring-diagnostic-title">预警进度</h2>
+            </div>
+            <button id="ring-test-alarm" type="button" class="outline-button" aria-describedby="ring-audio-output" disabled>
+              <svg class="icon" aria-hidden="true"><use href="#i-volume"/></svg>试听警报
+            </button>
+          </header>
+          <p class="ring-diagnostic-trigger" id="ring-trigger-state" role="status">正在连接本机服务</p>
+          <dl class="ring-diagnostic-steps" aria-live="polite" aria-atomic="true">
+            <div><dt>抽帧</dt><dd id="ring-capture-state">等待心率预警</dd></div>
+            <div><dt>DeepSeek</dt><dd id="ring-analysis-state">未提交</dd></div>
+            <div><dt>语音确认</dt><dd id="ring-voice-state">未开始</dd></div>
+            <div><dt>警报声</dt><dd id="ring-alarm-state">未触发</dd></div>
+          </dl>
+          <div class="ring-diagnostic-review" id="ring-diagnostic-review" hidden>
+            <p class="ring-help ring-diagnostic-detail" id="ring-diagnostic-detail" role="status" hidden></p>
+            <button id="ring-view-events" type="button" class="text-button" aria-controls="ring-events" hidden>查看预警记录</button>
+          </div>
+          <p class="ring-help ring-diagnostic-note" id="ring-audio-output">警报使用 Windows 默认声音输出。实际能否听到，可点「试听警报」确认。</p>
+          <p class="ring-help ring-diagnostic-note" id="ring-test-alarm-result" role="status" hidden></p>
+        </section>
 
         <div class="ring-layout ring-review-layout">
           <section class="panel ring-review-panel" aria-labelledby="ring-events-title">
@@ -240,7 +243,7 @@
             <ul id="ring-videos" class="ring-video-list" aria-label="选择已保存录像"></ul>
           </section>
         </div>
-        <p class="ring-footnote">用于现场辅助查看。姿势和动作可见时才有判断依据，预警需要人工确认。</p>
+        <p class="ring-footnote">预警与语音确认仅供人工查看现场时参考。</p>
       </section>
 
       <footer class="page-footer"><span>CONNECT STUDIO <span class="footer-divider">/</span> 为自然的交流而设计</span><span id="footer-status">音箱未连接 · 模型未连接</span></footer>

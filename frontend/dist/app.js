@@ -144,9 +144,7 @@
       service: ['让音箱，接入对话', '从音箱接收识别文字，向模型发送问题。', '音箱采集服务', '开始录音后，说“描述一下你看到的画面”，然后结束录音。']
     }[config.mode];
     ['mode-title', 'mode-description', 'audio-source-label', 'audio-note'].forEach((id, index) => { $(id).textContent = copy[index]; });
-    $('describe-help').textContent = config.mode === 'service'
-      ? '使用音箱摄像头拍照，发送给 DeepSeek 后语音播报。'
-      : '拍摄一张照片并发送给 DeepSeek，完成后语音播报。';
+    $('describe-help').textContent = '发送当前预览的一帧给 DeepSeek。未开启预览时，使用音箱摄像头拍照。';
     $('demo-button').hidden = config.mode !== 'demo'; $('audio-status').textContent = '准备好，开始说话'; refreshConnection();
   }
   function stopSpeech() {
@@ -250,20 +248,31 @@
     status.textContent = message;
     status.dataset.state = error ? 'error' : 'status';
   }
-  function captureBrowserPhoto() {
-    const track = cameraStream?.getVideoTracks()[0];
-    if (cameraKind !== 'browser' || track?.readyState !== 'live') return '';
-    const video = $('camera-video');
-    if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+  function capturePreviewPhoto() {
+    if (cameraPending) throw new Error('摄像头画面尚未准备好，请稍后重试。');
+    if (!cameraKind) return '';
+    const image = cameraKind === 'service-image';
+    const source = $(image ? 'camera-image' : 'camera-video');
+    const width = image ? source.naturalWidth : source.videoWidth;
+    const height = image ? source.naturalHeight : source.videoHeight;
+    const trackEnded = cameraKind === 'browser' && cameraStream?.getVideoTracks()[0]?.readyState !== 'live';
+    if (trackEnded || !width || !height || (!image && source.readyState < 2)) {
       throw new Error('摄像头画面尚未准备好，请稍后重试。');
     }
 
-    const scale = Math.min(1, 1600 / Math.max(video.videoWidth, video.videoHeight));
+    const scale = Math.min(1, 1600 / Math.max(width, height));
     const canvas = document.createElement('canvas');
-    canvas.width = Math.round(video.videoWidth * scale);
-    canvas.height = Math.round(video.videoHeight * scale);
-    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.88);
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    try {
+      canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.88);
+    } catch (error) {
+      if (error.name === 'SecurityError') {
+        throw new Error('当前视频地址限制跨域取图。请使用同源视频地址，或在画面来源中选择电脑 / USB 摄像头。');
+      }
+      throw error;
+    }
   }
   function localMediaUrl(value) {
     if (typeof value !== 'string' || !value) return '';
@@ -306,7 +315,7 @@
     try {
       if (stopping) await stopping;
       if (ticket !== generation) return;
-      const image = config.mode === 'service' ? '' : captureBrowserPhoto();
+      const image = capturePreviewPhoto();
       const body = { text: question };
       if (image) body.image = image;
       descriptionInProgress = true;

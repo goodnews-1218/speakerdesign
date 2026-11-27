@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 from queue import Queue
+import re
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -28,6 +29,65 @@ except ImportError:
 FRONTEND = Path(__file__).resolve().parent
 DEFAULT_EXE = FRONTEND.parent / "build-student" / "Release" / "connect_lab.exe"
 ROOT_LOG = "FALL_ALERT_ROOT="
+REPLY_SECONDS = 8
+SAFETY_QUESTION = "你摔倒了吗？如果你没事，请说，我没事。"
+MIC_RATE = 16000
+MIC_HEADER = 44
+
+
+def listen_for_reply(client, mic_path, cancel, stop_alarm, progress):
+    def stopped():
+        return cancel.is_set() or (stop_alarm is not None and stop_alarm.is_set())
+
+    if stopped():
+        return "stopped"
+    try:
+        if winsound is None:
+            return "unavailable"
+        prompt = client.synthesize(SAFETY_QUESTION, timeout=5)
+        with wave.open(io.BytesIO(prompt), "rb") as speech:
+            if speech.getnframes() > speech.getframerate() * 12:
+                return "unavailable"
+        if stopped():
+            return "stopped"
+        winsound.PlaySound(prompt, winsound.SND_MEMORY | winsound.SND_NODEFAULT)
+        # The recorder flushes mic.wav as PCM arrives. Its RIFF lengths are final only on stop.
+        with mic_path.open("rb") as mic:
+            header = mic.read(MIC_HEADER)
+            if header[:4] != b"RIFF" or header[8:16] != b"WAVEfmt " or header[36:40] != b"data":
+                return "unavailable"
+            if cancel.wait(0.15) or stopped():
+                return "stopped"
+            start = mic.seek(0, os.SEEK_END)
+            progress("listening")
+            for _ in range(REPLY_SECONDS * 4):
+                if cancel.wait(0.25) or stopped():
+                    return "stopped"
+            end = mic.seek(0, os.SEEK_END)
+            start -= (start - MIC_HEADER) % 2
+            size = min(end - start, MIC_RATE * 2 * REPLY_SECONDS)
+            if size < MIC_RATE * 2 * (REPLY_SECONDS - 2):
+                return "unavailable"
+            mic.seek(start)
+            pcm = mic.read(size - size % 2)
+        samples = array("h", pcm)
+        if not samples or sum(value * value for value in samples) < len(samples) * 100**2:
+            return "no_reply"
+        with io.BytesIO() as buffer:
+            with wave.open(buffer, "wb") as audio:
+                audio.setparams((1, 2, MIC_RATE, 0, "NONE", "not compressed"))
+                audio.writeframes(pcm)
+            progress("transcribing")
+            try:
+                reply = client.transcribe(buffer.getvalue(), timeout=6)
+            except APIError as error:
+                return "no_reply" if error.status == 422 else "unavailable"
+    except (APIError, OSError, RuntimeError, ValueError, EOFError, wave.Error):
+        return "unavailable"
+    if stopped():
+        return "stopped"
+    normalized = re.sub(r"[\s，。！？、,.!?]", "", reply)
+    return "acknowledged" if normalized in {"我没事", "我沒有事", "我没有事", "我沒事"} else "unconfirmed"
 
 
 def play_alarm():
@@ -105,7 +165,8 @@ def save_result(directory, result, on_line):
             on_line(line)
 
 
-def analyze_event(marker, client, notified, cancel, *, analyze_demo=False, stop_alarm=None, on_line=None):
+def analyze_event(marker, client, notified, cancel, *, analyze_demo=False, stop_alarm=None, on_line=None,
+                  acknowledged=None):
     result = {"verdict": "pending", "summary": "", "analysis_state": "queued",
               "alarm_state": "pending", "alarm_played": False}
 
@@ -123,6 +184,10 @@ def analyze_event(marker, client, notified, cancel, *, analyze_demo=False, stop_
         result["analysis_state"] = "received"
         save_result(marker.parent, result, on_line)
 
+    def voice_progress(state):
+        result["voice_state"] = state
+        save_result(marker.parent, result, on_line)
+
     try:
         event = load_event(marker)
         episode = event["episode"]
@@ -130,9 +195,11 @@ def analyze_event(marker, client, notified, cancel, *, analyze_demo=False, stop_
         if event["demo"]:
             if not analyze_demo:
                 return skipped("demo", "模拟心率，本轮图片保留在本机。", "demo")
-            result.update(analyze_demo=True, alarm_state="skipped", alarm_reason="demo")
+            result["analyze_demo"] = True
         if episode in notified:
             return skipped("already_alerted", "同一次心率预警已播放过警报声。", "already_alerted")
+        if acknowledged is not None and episode in acknowledged:
+            return skipped("acknowledged", "同一次心率预警已收到本人确认。", "voice_acknowledged")
         if event["status"] == "failed":
             return skipped("error", "抽帧失败，请检查摄像头和录像目录。", "insufficient_frames")
         if event["status"] != "ready":
@@ -152,14 +219,27 @@ def analyze_event(marker, client, notified, cancel, *, analyze_demo=False, stop_
     if result["analysis_state"] == "queued":
         return skipped(assessment.verdict, assessment.summary, "insufficient_frames")
     result.update(asdict(assessment))
-    if assessment.verdict != "suspected_fall":
+    if assessment.verdict not in ("suspected_fall", "suspected_immobility"):
         reason = "no_fall" if assessment.verdict == "no_visible_fall" else "uncertain"
         return {**result, "alarm_state": "skipped", "alarm_reason": reason}
-    if event["demo"]:
-        return result
     if cancel.is_set() or (stop_alarm is not None and stop_alarm.is_set()):
         return {**result, "alarm_state": "skipped", "alarm_reason": "stopped"}
-    print(f"RING_ALERT_POSSIBLE_FALL episode={episode} 疑似摔倒或倒下，请立即查看。", flush=True)
+    result["alarm_state"] = "confirming"
+    voice_progress("prompting")
+    mic_path = marker.parents[2] / "mic.wav"
+    voice = listen_for_reply(client, mic_path, cancel, stop_alarm, voice_progress)
+    result["voice_state"] = voice
+    if voice == "stopped" or cancel.is_set() or (stop_alarm is not None and stop_alarm.is_set()):
+        return {**result, "alarm_state": "skipped", "alarm_reason": "stopped"}
+    if voice == "acknowledged":
+        if acknowledged is not None:
+            acknowledged.add(episode)
+        return {**result, "alarm_state": "skipped", "alarm_reason": "voice_acknowledged"}
+    if assessment.verdict == "suspected_fall" and voice == "no_reply":
+        result["urgent"] = True
+        print(f"RING_ALERT_URGENT episode={episode} 心率预警、画面疑似跌倒或瘫软、未收到回应。请立即查看现场。",
+              flush=True)
+    print(f"RING_ALERT_NEEDS_REVIEW episode={episode} verdict={assessment.verdict} voice={voice}", flush=True)
     result["alarm_state"] = "playing"
     save_result(marker.parent, result, on_line)
     # A stop can arrive during the progress write, before playback has started.
@@ -178,6 +258,7 @@ def analyze_event(marker, client, notified, cancel, *, analyze_demo=False, stop_
 def watch_events(root, client, finished, cancel, *, analyze_demo=False, stop_alarm=None, on_line=None):
     handled = set()
     notified = set()
+    acknowledged = set()
     while not cancel.is_set():
         # A completed recording can publish its final batch between two directory reads.
         recording_finished = finished.is_set()
@@ -196,7 +277,7 @@ def watch_events(root, client, finished, cancel, *, analyze_demo=False, stop_ala
                 return
             handled.add(marker)
             result = analyze_event(marker, client, notified, cancel, analyze_demo=analyze_demo,
-                                   stop_alarm=stop_alarm, on_line=on_line)
+                                   stop_alarm=stop_alarm, on_line=on_line, acknowledged=acknowledged)
             verdict = result["verdict"]
             print(f"RING_ALERT_RESULT={verdict} event={marker.parent.name} alarm={result['alarm_played']} "
                   f"analysis={result['analysis_state']} alarm_state={result['alarm_state']} "
@@ -312,6 +393,7 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("recordings"), help="本地录像输出目录")
     parser.add_argument("--key-file", type=Path, default=FRONTEND / "deepseek.env", help="DeepSeek 本机配置文件")
     parser.add_argument("--test-alarm", action="store_true", help="仅试听 Windows 输出警报")
+    parser.add_argument("--analyze-demo", action="store_true", help="模拟心率使用真实画面和语音走完整预警流程")
     args, options = parser.parse_known_args()
     try:
         if args.test_alarm:
@@ -323,12 +405,14 @@ def main():
         if not executable.is_file():
             raise FileNotFoundError(f"找不到 {executable}，请先编译 Windows Release 版。")
         client = DeepSeek(args.key_file.resolve())
-        if "--ring-demo" not in options:
+        if args.analyze_demo and "--ring-demo" not in options:
+            parser.error("--analyze-demo 需要与 --ring-demo 一起使用。")
+        if "--ring-demo" not in options or args.analyze_demo:
             client.require_key()
-            print("心率预警时会将视频抽出的 JPEG 帧发给 DeepSeek。警报通过 Windows 默认输出播放。", flush=True)
+            print("心率预警时会将抽帧及语音确认片段发给 DeepSeek。询问和警报通过 Windows 默认输出播放。", flush=True)
         else:
             print("模拟心率只生成本机抽帧，不调用 DeepSeek。", flush=True)
-        return run_recorder(executable, args.output.resolve(), options, client)
+        return run_recorder(executable, args.output.resolve(), options, client, analyze_demo=args.analyze_demo)
     except (APIError, OSError, RuntimeError) as error:
         print(f"RING_ALERT_ERROR={error}", file=sys.stderr, flush=True)
         return 2

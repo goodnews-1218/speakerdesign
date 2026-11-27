@@ -28,7 +28,9 @@
     WAITING_FOR_PULSE: '正在等待心率读数',
   };
   const verdicts = {
-    suspected_fall: ['疑似跌倒或昏倒', 'danger'],
+    suspected_fall: ['疑似跌倒或突然瘫软', 'danger'],
+    suspected_immobility: ['预警后持续未见明显动作', 'danger'],
+    acknowledged: ['已收到语音确认', 'clear'],
     no_visible_fall: ['未发现明显跌倒', 'clear'],
     uncertain: ['画面无法确认', 'pending'],
     demo: ['演示结果', 'pending'],
@@ -53,6 +55,7 @@
   };
   const alarmLabels = {
     pending: ['等待分析结果', 'warning'],
+    confirming: ['等待语音确认', 'warning'],
     playing: ['正在通过 Windows 播放', 'warning'],
     played: ['Windows 已完成播放', 'success'],
     failed: ['Windows 音频播放失败', 'error'],
@@ -60,6 +63,7 @@
     unknown: ['播放状态未记录', ''],
   };
   const alarmSkipLabels = {
+    voice_acknowledged: '已收到「我没事」，本次未响铃',
     stopped: '监测已停止，未播放',
     no_fall: '分析结果未达到响铃条件',
     uncertain: '画面无法确认，未播放',
@@ -67,6 +71,16 @@
     already_alerted: '同一次预警已播放',
     insufficient_frames: '有效画面不足，未播放',
     analysis_failed: '分析失败，未播放',
+  };
+  const voiceLabels = {
+    prompting: ['正在准备或播放询问', 'warning'],
+    listening: ['正在听取回应（8 秒）', 'warning'],
+    transcribing: ['正在识别回应', 'warning'],
+    acknowledged: ['收到「我没事」', 'success'],
+    no_reply: ['窗口内未收到回应', 'warning'],
+    unconfirmed: ['未听到明确的平安确认', 'warning'],
+    unavailable: ['语音确认不可用，需人工查看', 'error'],
+    stopped: ['语音确认已停止'],
   };
 
   let status = null;
@@ -129,10 +143,10 @@
     $('ring-demo-analysis-option').hidden = !demo.checked;
     analyzeDemo.disabled = locked || !demo.checked;
     const help = !demo.checked
-      ? '启动 BioScope 并连接戒指。确认心率预警后会抽帧分析，画面支持疑似跌倒时才会响铃。'
+      ? '启动 BioScope 并连接戒指。预警画面及语音确认片段会发送给 DeepSeek。'
       : analyzeDemo.checked
-        ? '模拟预警时会将音箱摄像头的实际抽帧发送给 DeepSeek。模拟心率不会自动响铃。'
-        : '抽帧会保存在本机。勾选上方选项可将摄像头抽帧发送给 DeepSeek。';
+        ? '模拟心率使用真实摄像头和麦克风。画面和语音片段会发送给 DeepSeek，未确认平安时会响铃。'
+        : '抽帧保存在本机。勾选完整流程可测试画面分析、语音确认和响铃。';
     const helpNode = $('ring-start-help');
     if (helpNode.textContent !== help) helpNode.textContent = help;
     const message = actionError || connectionError || status?.error || '';
@@ -160,7 +174,7 @@
     if (alarm === alarmLabels.skipped && Object.hasOwn(alarmSkipLabels, item.alarm_reason)) {
       alarm = [alarmSkipLabels[item.alarm_reason]];
     }
-    return { capture, analysis, alarm };
+    return { capture, analysis, alarm, voice: voiceLabels[item.voice_state] || ['未开始'] };
   }
 
   function renderDiagnostic(data) {
@@ -174,6 +188,7 @@
     let capture = ['等待心率预警'];
     let analysis = ['未提交'];
     let alarm = ['未触发'];
+    let voice = ['未开始'];
     let detail = '';
     let detailTone = '';
     if (!data) {
@@ -194,9 +209,11 @@
       analysis = ['queued', 'requesting'].includes(lastBatch?.analysis_state)
         ? eventStages(lastBatch).analysis : stages.analysis;
       alarm = stages.alarm;
+      voice = stages.voice;
       if (latest.verdict !== 'pending') {
         const [verdict, tone] = verdicts[latest.verdict] || [];
-        detail = [verdict, latest.summary].filter(Boolean).join(' · ');
+        detail = [latest.urgent ? '高优先级：疑似失去意识，请立即查看现场' : verdict,
+          latest.summary].filter(Boolean).join(' · ');
         detailTone = tone === 'danger' ? 'error' : '';
       }
     } else if (data.state === 'starting') {
@@ -212,13 +229,14 @@
     if (data?.demo) {
       if (!data.analyze_demo) analysis = ['模拟心率，画面保存在本机'];
       else if ((!latest || waitingForFrames) && isActive(data.state)) analysis = ['已开启，等待预警画面'];
-      alarm = ['模拟心率，不自动响铃'];
+      if (!data.analyze_demo) alarm = ['本地演示，不响铃'];
     }
     if (connectionError && data) trigger = ['连接中断，显示最后一次状态', 'error'];
     setDiagnostic('ring-trigger-state', trigger);
     setDiagnostic('ring-capture-state', capture);
     setDiagnostic('ring-analysis-state', analysis);
     setDiagnostic('ring-alarm-state', alarm);
+    setDiagnostic('ring-voice-state', voice);
     setDiagnostic('ring-diagnostic-detail', [detail, detailTone]);
     $('ring-diagnostic-detail').hidden = !detail;
     $('ring-view-events').hidden = !events.length;
@@ -301,7 +319,7 @@
     const title = episode ? '预警 ' + episode : '心率预警';
     header.append(
       element('span', 'ring-event-name', title),
-      element('span', 'ring-badge ring-verdict ' + tone, verdict),
+      element('span', 'ring-badge ring-verdict ' + tone, item.urgent ? '高优先级 · 疑似失去意识' : verdict),
     );
     const body = element('div', 'ring-event-body');
     appendEventResult(body, item);
@@ -352,9 +370,9 @@
       body.append(time);
     }
     if (item.summary) body.append(element('p', 'ring-event-summary', item.summary));
-    const { capture, analysis, alarm } = eventStages(item);
+    const { capture, analysis, alarm, voice } = eventStages(item);
     const stages = element('dl', 'ring-event-stages');
-    for (const [label, value] of [['抽帧', capture], ['DeepSeek', analysis], ['警报声', alarm]]) {
+    for (const [label, value] of [['抽帧', capture], ['DeepSeek', analysis], ['语音确认', voice], ['警报声', alarm]]) {
       stages.append(element('dt', '', label), element('dd', '', value[0]));
     }
     body.append(stages);
@@ -375,9 +393,11 @@
     const list = $('ring-events');
     const expanded = new Map([...list.querySelectorAll('details[data-event-id]')]
       .map((event) => [event.dataset.eventId, event.open]));
-    const latest = items.find((item) => eventAnnouncements.get(String(item.id)) !== item.verdict);
-    eventAnnouncements = new Map(items.map((item) => [String(item.id), item.verdict]));
-    if (latest) $('ring-event-update').textContent = '心率预警更新。' + (verdicts[latest.verdict]?.[0] || '等待确认') + '。';
+    const announcements = new Map(items.map((item) => [String(item.id), item.urgent
+      ? '高优先级预警，请立即查看现场' : (verdicts[item.verdict]?.[0] || '等待确认')]));
+    const changed = [...announcements].find(([id, message]) => eventAnnouncements.get(id) !== message);
+    eventAnnouncements = announcements;
+    if (changed) $('ring-event-update').textContent = changed[1] + '。';
     list.replaceChildren(...items.map((item, index) => renderEvent(item, expanded, index === 0)));
     eventSignature = signature;
   }

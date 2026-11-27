@@ -108,6 +108,17 @@ class RingWebStatusTests(unittest.TestCase):
         self.assertEqual([frame["time_ms"] for frame in item["frames"]], [-1000, 0, 1000])
         self.assertEqual({batch["analysis_state"] for batch in item["batches"]}, {"received", "skipped"})
 
+    def test_urgent_result_remains_visible_across_batches(self):
+        self.event({"verdict": "suspected_fall", "voice_state": "no_reply", "urgent": True,
+                    "alarm_state": "failed"})
+        self.event({"verdict": "suspected_fall", "voice_state": "unavailable", "urgent": True,
+                    "alarm_state": "played"}, batch=2)
+        item = self.app().status()["events"][0]
+        self.assertTrue(item["urgent"])
+        self.assertEqual(item["voice_state"], "no_reply")
+        self.assertFalse(item["batches"][1]["urgent"])
+        self.assertEqual(item["alarm_state"], "played")
+
     @patch("ring_web.play_alarm")
     def test_audition_is_local_and_releases_device_after_failure(self, play_alarm):
         app = self.app()

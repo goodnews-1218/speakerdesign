@@ -77,10 +77,11 @@ void RingAlertFrames::pulse(std::optional<Time> onset, Time now, bool active) no
         if (stopped_) return;
         if (onset) {
             confirmed_ = now;
-            lastEnd_ = now + 3s;
+            lastEnd_ = now + 9s;
             ++episode_;
-            batch_ = 1;
-            batches_.push_back({episode_, batch_, now, now - 3s, lastEnd_, onset});
+            batch_ = 2;
+            batches_.push_back({episode_, 1, now, now - 3s, now + 3s, onset});
+            batches_.push_back({episode_, 2, now, now, lastEnd_, {}});
         } else if (confirmed_ && ((active && now >= lastEnd_ + followupInterval) ||
                                   (!active && now > lastEnd_ + 1s))) {
             batches_.push_back({episode_, ++batch_, *confirmed_, lastEnd_ - 1s, now, {}});

@@ -21,12 +21,14 @@ VIDEO_NAME = re.compile(r"video\.mp4|highlight-ring-[0-9]+\.mp4|segments/segment
 FRAME_NAME = re.compile(r"fall-alerts/(event-[0-9]+-[0-9]+)/frame-([0-9]{3})\.jpg")
 PREVIEW = "fall-alerts/preview.jpg"
 EVENT_VERDICTS = {"suspected_fall", "no_visible_fall", "uncertain", "error", "demo",
-                  "already_alerted", "cancelled"}
+                  "already_alerted", "cancelled", "suspected_immobility", "acknowledged"}
 ANALYSIS_STATES = {"queued", "requesting", "received", "failed", "skipped", "unknown"}
-ALARM_STATES = {"pending", "playing", "played", "failed", "skipped", "unknown"}
+ALARM_STATES = {"pending", "confirming", "playing", "played", "failed", "skipped", "unknown"}
+VOICE_STATES = {"prompting", "listening", "transcribing", "acknowledged", "no_reply", "unconfirmed",
+                "unavailable", "stopped"}
 # Keep a confirmed suspicion visible even if a later batch is skipped or inconclusive.
-VERDICT_PRIORITY = ("already_alerted", "cancelled", "pending", "no_visible_fall", "demo",
-                    "error", "uncertain", "suspected_fall")
+VERDICT_PRIORITY = ("already_alerted", "acknowledged", "cancelled", "pending", "no_visible_fall", "demo",
+                    "error", "uncertain", "suspected_immobility", "suspected_fall")
 PULSE_LINES = {
     "RING_BPM", "RING_DEMO_BPM", "RING_RECOVERED_BPM", "RING_HELD_BPM", "RING_LAST_BPM",
 }
@@ -103,7 +105,7 @@ def event_states(result, capture, verdict, active):
             alarm = "skipped"
         else:
             alarm = "pending" if verdict == "pending" else "unknown"
-    if not active and alarm in ("pending", "playing"):
+    if not active and alarm in ("pending", "confirming", "playing"):
         alarm = "unknown"
     return analysis, alarm
 
@@ -155,12 +157,20 @@ def list_events(session, active):
             summary = "可用画面不足，无法分析。"
         summary = summary[:300] if isinstance(summary, str) else ""
         alarm_reason = result.get("alarm_reason")
+        voice = result.get("voice_state")
+        if not isinstance(voice, str) or voice not in VOICE_STATES:
+            voice = None
+        elif not active and voice in ("prompting", "listening", "transcribing"):
+            voice = "stopped"
         states = {"verdict": verdict, "summary": summary, "capture_state": capture,
-                  "analysis_state": analysis, "alarm_state": alarm,
+                  "analysis_state": analysis, "alarm_state": alarm, "voice_state": voice,
+                  "urgent": result.get("urgent") is True and verdict == "suspected_fall" and voice == "no_reply",
                   "alarm_reason": alarm_reason if isinstance(alarm_reason, str) else None}
         event = events.setdefault(episode, {"id": f"event-{episode}", "created_at": created_at,
                                            "alarm_played": False, "frames": {}, "batches": []})
-        if "verdict" not in event or VERDICT_PRIORITY.index(verdict) >= VERDICT_PRIORITY.index(event["verdict"]):
+        if ("verdict" not in event or
+                (states["urgent"], VERDICT_PRIORITY.index(verdict)) >=
+                (event["urgent"], VERDICT_PRIORITY.index(event["verdict"]))):
             event.update(states)
         event["alarm_played"] |= alarm == "played" or verdict == "already_alerted"
         frame_count = 0
