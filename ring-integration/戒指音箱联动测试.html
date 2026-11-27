@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>戒指音箱联动测试</title>
+<style>
+body{font:18px/1.65 system-ui,sans-serif;max-width:720px;margin:8vh auto;padding:0 24px;color:#163047;background:#f2f7fa}
+button{font:inherit;background:#135b72;color:white;border:0;border-radius:8px;padding:10px 18px;cursor:pointer}
+#status{padding:18px;border:1px solid #b6cdd9;border-radius:8px;background:white}
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px}.metrics div{background:white;border:1px solid #b6cdd9;border-radius:8px;padding:12px}.metrics dd{margin:4px 0;font-weight:650}button:disabled{opacity:.55;cursor:default}
+</style>
+<h1>戒指音箱联动测试</h1>
+<p>点一次「开始测试」，确认听到短提示音。测试时保持这个页面在前台。</p>
+<button id="start">开始测试</button>
+<p>4 秒内做两次向下动作，播报「我摔倒了」。双击触摸区，查询并播报当前天气。</p>
+<p><label for="city">城市</label> <input id="city" placeholder="例如 杭州" autocomplete="off"> <button id="weather">播报天气</button></p>
+<p><small>天气数据由 <a href="https://open-meteo.com/">Open-Meteo</a> 提供。</small></p>
+<p id="status" role="status" aria-live="polite">等待开始</p>
+<section aria-labelledby="health-heading">
+<h2 id="health-heading">戒指生理指标</h2>
+<dl class="metrics">
+  <div><dt>心率</dt><dd id="heart-rate">—</dd></div>
+  <div><dt>血氧</dt><dd id="oxygen">—</dd></div>
+  <div><dt>戒指测得温度</dt><dd id="ring-temperature">—</dd></div>
+</dl>
+<p><button id="connect-ring">连接戒指蓝牙数据</button> <button id="reconnect-ring">重连已授权戒指</button> <button id="scan-all">显示全部附近设备</button> <button id="measure-ring" disabled>开始测量</button></p>
+<p id="health-status" role="status">请戴好戒指，测量时保持手部静止。</p>
+</section>
+<script>
+const status = document.getElementById('status');
+const start = document.getElementById('start');
+const motions = [];
+let audio;
+let nextAlarm = 0;
+function beep(offset, duration) {
+  const tone = audio.createOscillator();
+  const volume = audio.createGain();
+  tone.frequency.value = 660;
+  volume.gain.value = 0.12;
+  tone.connect(volume).connect(audio.destination);
+  tone.start(audio.currentTime + offset);
+  tone.stop(audio.currentTime + offset + duration);
+}
+start.addEventListener('click', async () => {
+  try {
+    audio ??= new AudioContext();
+    await audio.resume();
+    beep(0, 0.13);
+    status.textContent = '已开始，等待戒指输入';
+    start.blur();
+  } catch {
+    status.textContent = '无法启用音频，请重新点开始测试。';
+  }
+});
+const city = document.getElementById('city');
+let weatherRequest;
+const conditions = {
+  0:'晴', 1:'大部晴朗', 2:'局部多云', 3:'阴', 45:'有雾', 48:'有雾凇',
+  51:'小毛毛雨', 53:'毛毛雨', 55:'较强毛毛雨', 56:'冻毛毛雨', 57:'冻毛毛雨',
+  61:'小雨', 63:'中雨', 65:'大雨', 66:'冻雨', 67:'冻雨',
+  71:'小雪', 73:'中雪', 75:'大雪', 77:'雪粒', 80:'小阵雨', 81:'阵雨',
+  82:'强阵雨', 85:'阵雪', 86:'强阵雪', 95:'雷暴', 96:'雷暴伴冰雹', 99:'雷暴伴冰雹'
+};
+
+async function weatherJson(endpoint, parameters, signal) {
+  const response = await fetch(endpoint + '?' + new URLSearchParams(parameters), {signal});
+  if (!response.ok) throw new Error('天气服务请求失败');
+  return response.json();
+}
+
+function weatherSpeech(message) {
+  status.textContent = message;
+  const speech = new SpeechSynthesisUtterance(message);
+  speech.lang = 'zh-CN';
+  speechSynthesis.speak(speech);
+}
+
+async function reportWeather() {
+  if (audio?.state !== 'running' || performance.now() < nextAlarm) return;
+  weatherRequest?.abort();
+  const name = city.value.trim();
+  speechSynthesis.cancel();
+  if (!name) {
+    weatherSpeech('请先输入要查询的城市。');
+    return;
+  }
+  const request = new AbortController();
+  weatherRequest = request;
+  const timeout = setTimeout(() => request.abort('timeout'), 10000);
+  status.textContent = '正在查询 ' + name + ' 的天气…';
+  try {
+    const place = await weatherJson('https://geocoding-api.open-meteo.com/v1/search',
+      {name, count: '1', language: 'zh'}, request.signal);
+    const location = place.results?.[0];
+    if (!location) {
+      weatherSpeech('没有找到这个城市，可以试试去掉市字或输入拼音。');
+      return;
+    }
+    const forecast = await weatherJson('https://api.open-meteo.com/v1/forecast',
+      {latitude: location.latitude, longitude: location.longitude,
+        current: 'temperature_2m,apparent_temperature,weather_code', timezone: 'auto'}, request.signal);
+    const current = forecast.current;
+    if (!Number.isFinite(current?.temperature_2m)) throw new Error('缺少当前气温');
+    const area = [...new Set([location.admin1, location.name].filter(Boolean))].join('，');
+    const condition = conditions[current.weather_code];
+    const feelsLike = Number.isFinite(current.apparent_temperature)
+      ? '，体感温度 ' + Math.round(current.apparent_temperature) + ' 摄氏度' : '';
+    weatherSpeech(area + '，当前' + (condition ? condition + '，' : '') +
+      '气温 ' + Math.round(current.temperature_2m) + ' 摄氏度' + feelsLike + '。');
+  } catch {
+    if (!request.signal.aborted || request.signal.reason === 'timeout') {
+      weatherSpeech('暂时无法获取天气，请检查网络后再试。');
+    }
+  } finally {
+    clearTimeout(timeout);
+    if (weatherRequest === request) weatherRequest = null;
+  }
+}
+document.getElementById('weather').addEventListener('click', reportWeather);
+window.addEventListener('keydown', event => {
+  if (event.target === city) return;
+  if (audio?.state !== 'running' || !['PageUp', 'PageDown', 'Enter'].includes(event.key)) return;
+  event.preventDefault();
+  if (event.repeat) return;
+  if (event.key === 'Enter') {
+    motions.length = 0;
+    void reportWeather();
+    return;
+  }
+  if (event.key === 'PageUp') return;
+  const now = performance.now();
+  if (now < nextAlarm) return;
+  while (motions.length && now - motions[0] > 4000) motions.shift();
+  motions.push(now);
+  status.textContent = '收到向下动作（Page Down），计数 ' + motions.length + ' / 2';
+  if (motions.length === 2) {
+    motions.length = 0;
+    nextAlarm = now + 2500;
+    weatherRequest?.abort();
+    speechSynthesis.cancel();
+    const alarm = new SpeechSynthesisUtterance('我摔倒了');
+    alarm.lang = 'zh-CN';
+    alarm.onerror = () => { status.textContent = '已触发求救，但浏览器未能播放语音。'; };
+    speechSynthesis.speak(alarm);
+    status.textContent = '已触发求救语音';
+  }
+});
+const connectRing = document.getElementById('connect-ring');
+const measureRing = document.getElementById('measure-ring');
+const healthStatus = document.getElementById('health-status');
+const metrics = ['heart-rate', 'oxygen', 'ring-temperature'].map(id => document.getElementById(id));
+const ringUuid = part => 'bae8' + part + '-4f05-4503-8e65-3af1f7329d1f';
+let ringDevice;
+let ringCommand;
+let measurement;
+let ringSequence = 0;
+
+function finishMeasurement(message) {
+  clearTimeout(measurement?.timer);
+  measurement = undefined;
+  measureRing.disabled = !ringCommand;
+  healthStatus.textContent = message;
+}
+
+function receiveHealth(event) {
+  const packet = event.target.value;
+  if (!measurement || packet.byteLength < 5 || packet.getUint8(0) !== 0 ||
+      packet.getUint8(1) !== measurement.sequence || packet.getUint8(2) !== 0x32) return;
+  const subtype = packet.getUint8(3);
+  const state = packet.getUint8(4);
+  if (subtype === 0xff) {
+    measurement.progress = state;
+    healthStatus.textContent = '测量中 · ' + state + '%';
+    return;
+  }
+  if (subtype !== 0 || packet.byteLength < 9) return;
+  if (state === 0 || state === 2 || state === 4) {
+    finishMeasurement({0:'戒指未检测到佩戴，请调整位置后重试。', 2:'请将戒指取下充电座再测量。', 4:'戒指正在进行其他测量，请稍后重试。'}[state]);
+    return;
+  }
+  if (state !== 3) return;
+  const heart = packet.getUint8(5);
+  const oxygen = packet.getUint8(6);
+  const temperature = packet.getInt16(7, true);
+  metrics[0].textContent = heart > 0 && heart < 255 ? heart + ' 次/分' : '—';
+  metrics[1].textContent = oxygen > 0 && oxygen <= 100 ? oxygen + '%' : '—';
+  metrics[2].textContent = temperature > 0 && temperature < 10000
+    ? (temperature / 100).toFixed(2) + ' °C' : '—';
+  if (measurement.progress >= 100) {
+    finishMeasurement(metrics.some(metric => metric.textContent === '—')
+      ? '测量结束，部分指标未收到有效读数。' : '测量完成。');
+  }
+}
+
+const scanAll = document.getElementById('scan-all');
+const reconnectRing = document.getElementById('reconnect-ring');
+connectRing.addEventListener('click', () => connectHealth(false));
+scanAll.addEventListener('click', () => connectHealth(true));
+
+reconnectRing.addEventListener('click', () => connectHealth(false, true));
+
+async function connectHealth(showAll, previouslyAuthorized = false) {
+  if (!navigator.bluetooth?.requestDevice) {
+    healthStatus.textContent = '当前浏览器无法访问蓝牙，请用 Windows 上的 Edge 或 Chrome 打开本页。';
+    return;
+  }
+  if (ringCommand) {
+    ringDevice.gatt.disconnect();
+    return;
+  }
+  connectRing.disabled = true;
+  scanAll.disabled = true;
+  reconnectRing.disabled = true;
+  try {
+    const options = showAll ? {acceptAllDevices: true, optionalServices: [ringUuid('0001')]} : {
+      filters: [
+        {namePrefix: 'BCL603'},
+        {manufacturerData: [{companyIdentifier: 0xff14}]}
+      ],
+      optionalServices: [ringUuid('0001')]
+    };
+    let device;
+    if (previouslyAuthorized) {
+      device = ringDevice;
+      if (!device && navigator.bluetooth.getDevices) {
+        const knownDevices = await navigator.bluetooth.getDevices();
+        device = knownDevices.find(item => item.name === 'BCL6039F5A');
+      }
+      if (!device) throw new Error('此页面没有可重连的戒指授权。请使用之前成功测量的 Edge 标签页和浏览器个人资料。');
+    } else {
+      device = await navigator.bluetooth.requestDevice(options);
+    }
+    if (showAll && device.name !== 'BCL6039F5A') throw new Error('请选择 BCL6039F5A');
+    ringDevice = device;
+    const onDisconnect = () => {
+      ringCommand = undefined;
+      scanAll.disabled = false;
+      reconnectRing.disabled = false;
+      connectRing.textContent = '连接戒指蓝牙数据';
+      const hasPreviousValue = metrics.some(metric => metric.textContent !== '—');
+      finishMeasurement(hasPreviousValue
+        ? '戒指蓝牙数据已断开。上方显示上次收到的读数。'
+        : '戒指蓝牙数据已断开。');
+    };
+    device.addEventListener('gattserverdisconnected', onDisconnect, {once:true});
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(ringUuid('0001'));
+    const command = await service.getCharacteristic(ringUuid('0010'));
+    const notify = await service.getCharacteristic(ringUuid('0011'));
+    notify.addEventListener('characteristicvaluechanged', receiveHealth);
+    await notify.startNotifications();
+    if (!server.connected) throw new Error('戒指已断开');
+    ringCommand = command;
+    connectRing.textContent = '断开蓝牙数据';
+    measureRing.disabled = false;
+    healthStatus.textContent = device.name + ' 已连接，可以开始测量。';
+  } catch (error) {
+    if (ringDevice?.gatt.connected) ringDevice.gatt.disconnect();
+    healthStatus.textContent = error.name === 'NotFoundError'
+      ? '未选择戒指。请先断开平板上的 nRF Connect，再重新选择。'
+      : '蓝牙连接失败 · ' + error.message;
+  } finally {
+    connectRing.disabled = false;
+    scanAll.disabled = Boolean(ringCommand);
+    reconnectRing.disabled = Boolean(ringCommand);
+  }
+}
+
+measureRing.addEventListener('click', async () => {
+  if (!ringCommand || measurement) return;
+  measureRing.disabled = true;
+  metrics.forEach(metric => { metric.textContent = '—'; });
+  const sequence = ringSequence = ringSequence % 255 + 1;
+  const request = {
+    sequence, progress: 0,
+    timer: setTimeout(() => finishMeasurement('测量已超时，请检查佩戴和蓝牙连接。'), 45000)
+  };
+  measurement = request;
+  healthStatus.textContent = '正在测量，请保持手部静止，约需 30 秒。';
+  try {
+    await ringCommand.writeValueWithResponse(Uint8Array.of(0, sequence, 0x32, 0, 30, 0, 0, 1));
+  } catch (error) {
+    if (measurement === request) finishMeasurement('测量命令发送失败 · ' + error.message);
+  }
+});
+if (location.origin === 'http://127.0.0.1:8765') {
+  for (const button of [connectRing, reconnectRing, scanAll]) button.hidden = true;
+  measureRing.disabled = false;
+  healthStatus.textContent = '使用 Windows 已配对的戒指。戴好戒指后点击开始测量。';
+  measureRing.addEventListener('click', async () => {
+    measureRing.disabled = true;
+    metrics.forEach(metric => { metric.textContent = '—'; });
+    healthStatus.textContent = '正在从 Windows 读取戒指，请保持手部静止。';
+    try {
+      const response = await fetch('/measure', {method:'POST', headers:{'X-Ring-Measure':'1'}});
+      if (!response.ok) throw new Error(await response.text());
+      const {heart, oxygen, temperature} = await response.json();
+      metrics[0].textContent = heart == null ? '—' : heart + ' 次/分';
+      metrics[1].textContent = oxygen == null ? '—' : oxygen + '%';
+      metrics[2].textContent = temperature == null ? '—' : temperature.toFixed(2) + ' °C';
+      healthStatus.textContent = metrics.some(metric => metric.textContent === '—')
+        ? '测量结束，部分指标未收到有效读数。' : '测量完成。';
+    } catch (error) {
+      healthStatus.textContent = 'Windows 测量失败 · ' + error.message;
+    } finally {
+      measureRing.disabled = false;
+    }
+  });
+}
+</script>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
