@@ -148,7 +148,8 @@ void activeEpisode(const fs::path& root) {
         }
     };
 
-    sampleFrames(sampler, origin, -7, 3);
+    // The synthetic clock is 40 seconds behind, so both batches are already due.
+    sampleFrames(sampler, origin, -7, 10);
     samplePulse(-2, 0, 100);
     const auto firstDirectory = root / "event-1-1";
     const auto first = awaitMarker(firstDirectory);
@@ -156,15 +157,16 @@ void activeEpisode(const fs::path& root) {
     checkBatch(first, 1, 1);
     require(first.find("\"status\":\"ready\"") != std::string::npos, "Valid first batch was marked insufficient");
     const auto times = markerTimes(first);
+    require(first.find("\"onset_ms\":-2000,") != std::string::npos,
+            "First batch must distinguish heart-rate onset from alert confirmation");
     require(times.size() >= 3 && times.front() <= -2000 && times.back() >= 0 &&
                 std::ranges::is_sorted(times) && std::ranges::adjacent_find(times) == times.end(),
             "First batch must include chronological frames around onset and confirmation");
     checkJpeg(firstDirectory / "frame-000.jpg");
 
-    sampleFrames(sampler, origin, 4, 10);
-    samplePulse(1, 10, 100);
+    samplePulse(1, 4, 75);
     const auto followup = awaitMarker(root / "event-1-2");
-    require(detector.active(), "Follow-up did not publish while the pulse remained elevated");
+    require(!detector.active(), "Synthetic pulse failed to recover before the follow-up");
     checkBatch(followup, 1, 2);
     require(followup.find("\"status\":\"ready\"") != std::string::npos && markerTimes(followup).back() >= 8000,
             "Follow-up did not contain newer video frames");

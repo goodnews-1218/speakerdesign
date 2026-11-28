@@ -1,8 +1,13 @@
 @echo off
-chcp 65001 >nul
-cd /d "%~dp0"
-echo 声境 Connect 本地页面
-echo 启动后请在浏览器打开 http://127.0.0.1:4173
-echo 保持此窗口开启。按 Ctrl+C 停止服务。
-python serve.py --open
-pause
+setlocal
+cd /d "%~dp0" || exit /b 1
+
+echo Starting Connect Studio...
+echo Keep this window open. Press Ctrl+C to stop the server.
+python serve.py --open %*
+set "exit_code=%errorlevel%"
+if not "%exit_code%"=="0" (
+    echo Connect Studio stopped with an error. See the message above.
+    pause
+)
+exit /b %exit_code%

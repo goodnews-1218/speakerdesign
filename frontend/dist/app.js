@@ -4,11 +4,13 @@
   const $ = (id) => document.getElementById(id);
   const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const initialAnswer = '你好，我是你的语音助手。\n\n从一句话开始，我可以成为你身边的灵感搭档。\n\n聊一聊：回答问题、整理思路，让复杂的事情更清楚。\n看一看：选择“描述当前画面”，拍照并获得 DeepSeek 的语音描述。\n听一听：把回答读给你听，让交流更自然。\n\n这是示例回答。连接模型服务后，这里将显示真实回复。';
+  const initialAnswer = '我可以回答问题，也可以描述摄像头画面。试试输入问题，或点击「描述当前画面」。';
   const exampleQuestion = '你好，介绍一下你能帮我做什么吧。';
   const describeQuestion = '描述一下你看到的画面';
   const localService = /^https?:$/.test(window.location.protocol) ? window.location.origin : '';
   const replyAudio = $('reply-audio');
+  const ringGestureToggle = $('ring-gesture-toggle');
+  const interactiveTarget = 'input, textarea, select, button, a[href], area[href], summary, audio[controls], video[controls], [contenteditable]:not([contenteditable="false"]), [tabindex]:not(#workspace-main, #answer-scroll, #ring-title, #ring-events-title)';
   const storage = {
     get(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
     set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; } }
@@ -24,6 +26,7 @@
   let speechActive = false, speechVersion = 0, answerAudioUrl = '', cameraVersion = 0;
   let serverPlayback = false, serverPlaybackTimer;
   let descriptionInProgress = false, pendingPlaybackStop = null;
+  let ringGestureArmed = false;
   let cameraStream = null, cameraKind = '', videoObjectUrl = '', audioObjectUrl = '', cameraTimeout = null, cameraPending = false;
   let toastTimer;
 
@@ -37,6 +40,15 @@
   }
   function updateCount() { $('character-count').textContent = `${Array.from($('transcript').value).length} 字`; }
   function setFlow(step) { ['listen', 'read', 'answer', 'speak'].forEach((name) => $(`flow-${name}`).classList.toggle('active', step === name)); }
+  function selectMobilePanel(panel, focusAnswer = false) {
+    const view = $('conversation-view');
+    view.dataset.mobilePanel = panel;
+    $('mobile-conversation-input').setAttribute('aria-pressed', String(panel === 'input'));
+    $('mobile-conversation-answer').setAttribute('aria-pressed', String(panel === 'answer'));
+    if (focusAnswer && !view.hidden && $('mobile-conversation-answer').getClientRects().length) {
+      $('answer-scroll').focus({ preventScroll: true });
+    }
+  }
   function setBusy(value) {
     busy = value;
     ['send-button', 'upload-button', 'demo-button', 'describe-button'].forEach((id) => { $(id).disabled = value; });
@@ -61,6 +73,7 @@
   }
   function clearDescriptionMedia() {
     answerAudioUrl = '';
+    $('description-audio-status').hidden = true;
     replyAudio.removeAttribute('src');
     replyAudio.load();
     const image = $('description-image');
@@ -73,6 +86,7 @@
     clearDescriptionMedia();
     answer = text; answerKind = kind;
     $('answer-content').className = 'answer-content plain-answer'; $('answer-content').textContent = text;
+    $('answer-scroll').scrollTop = 0;
     $('answer-badge').textContent = kind === 'demo' ? '演示回答' : '模型回答';
     $('answer-badge').className = 'badge green';
     $('answer-model').replaceChildren();
@@ -80,12 +94,13 @@
     $('answer-model').append(mark, document.createTextNode(modelName || (kind === 'demo' ? '演示助手' : '已连接模型')));
     $('copy-answer').disabled = !text; $('speak-answer').disabled = !text;
   }
-  function emptyAnswer(message = '你的下一句，值得一个好回答。') {
+  function emptyAnswer(message = '输入问题后，回答会显示在这里。') {
     clearDescriptionMedia();
     answer = ''; answerQuestion = ''; $('answer-content').className = 'answer-content empty-answer';
     answerKind = config.mode === 'demo' ? 'demo' : 'model';
     $('answer-model').textContent = config.mode === 'demo' ? '✳ 演示助手' : (serviceStatus?.model?.connected ? (serviceStatus.model.name || '已连接模型') : '等待模型连接');
     $('answer-content').innerHTML = icon('spark'); const p = document.createElement('p'); p.textContent = message; $('answer-content').append(p);
+    $('answer-scroll').scrollTop = 0;
     $('answer-badge').textContent = '等待提问'; $('answer-badge').className = 'badge neutral';
     $('copy-answer').disabled = true; $('speak-answer').disabled = true;
   }
@@ -129,12 +144,15 @@
   function refreshConnection() {
     const connected = serviceStatus?.device?.connected === true;
     const model = serviceStatus?.model?.connected === true;
-    const deviceText = connected ? '音箱已连接' : serviceStatus?.device?.checked === false ? '等待检测音箱' : '设备未连接';
+    const deviceText = connected ? '音箱已连接' : serviceStatus?.device?.checked === false ? '等待检测音箱' : '音箱未连接';
     const modelText = model ? '模型已连接' : serviceStatus?.model?.configured ? '模型已配置' : '模型未连接';
     $('connection-label').classList.toggle('connected', connected);
     $('connection-label').replaceChildren(); const dot = document.createElement('span'); dot.className = 'status-dot';
+    dot.setAttribute('aria-hidden', 'true');
     $('connection-label').append(dot, document.createTextNode(deviceText));
-    $('sidebar-device').textContent = connected ? (serviceStatus.device.name || deviceText) : deviceText;
+    $('sidebar-connection').classList.toggle('connected', connected);
+    const sidebarStatus = $('sidebar-device');
+    if (sidebarStatus.textContent !== deviceText) sidebarStatus.textContent = deviceText;
     $('footer-status').textContent = `${deviceText} · ${modelText}`;
   }
   function applyMode() {
@@ -144,9 +162,7 @@
       service: ['让音箱，接入对话', '从音箱接收识别文字，向模型发送问题。', '音箱采集服务', '开始录音后，说“描述一下你看到的画面”，然后结束录音。']
     }[config.mode];
     ['mode-title', 'mode-description', 'audio-source-label', 'audio-note'].forEach((id, index) => { $(id).textContent = copy[index]; });
-    $('describe-help').textContent = config.mode === 'service'
-      ? '使用音箱摄像头拍照，发送给 DeepSeek 后语音播报。'
-      : '拍摄一张照片并发送给 DeepSeek，完成后语音播报。';
+    $('describe-help').textContent = '发送当前预览的一帧给 DeepSeek。未开启预览时，使用音箱摄像头拍照。';
     $('demo-button').hidden = config.mode !== 'demo'; $('audio-status').textContent = '准备好，开始说话'; refreshConnection();
   }
   function stopSpeech() {
@@ -230,7 +246,12 @@
       row.append(button, remove); $('history-list').append(row);
     });
   }
-  async function loadHistory(item) { await cancelWork(); currentId = item.id; answerQuestion = item.text; setTranscript(item.text, '历史记录'); showAnswer(item.answer, item.mode); $('audio-status').textContent = '已载入历史对话'; $('history-dialog').close(); }
+  async function loadHistory(item) {
+    await cancelWork(); currentId = item.id; answerQuestion = item.text;
+    setTranscript(item.text, '历史记录'); showAnswer(item.answer, item.mode);
+    $('audio-status').textContent = '已载入历史对话'; $('history-dialog').close();
+    selectMobilePanel('answer', true);
+  }
   function demoResponse(question) {
     if (/介绍|做什么|你好|能力/.test(question)) return initialAnswer;
     if (/画面|看到|摄像|桌面|拍照/.test(question)) return '当前这段是演示回答。\n\n选择“描述当前画面”，可以拍一张照片，发送给 DeepSeek 生成语音描述。';
@@ -250,20 +271,31 @@
     status.textContent = message;
     status.dataset.state = error ? 'error' : 'status';
   }
-  function captureBrowserPhoto() {
-    const track = cameraStream?.getVideoTracks()[0];
-    if (cameraKind !== 'browser' || track?.readyState !== 'live') return '';
-    const video = $('camera-video');
-    if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+  function capturePreviewPhoto() {
+    if (cameraPending) throw new Error('摄像头画面尚未准备好，请稍后重试。');
+    if (!cameraKind) return '';
+    const image = cameraKind === 'service-image';
+    const source = $(image ? 'camera-image' : 'camera-video');
+    const width = image ? source.naturalWidth : source.videoWidth;
+    const height = image ? source.naturalHeight : source.videoHeight;
+    const trackEnded = cameraKind === 'browser' && cameraStream?.getVideoTracks()[0]?.readyState !== 'live';
+    if (trackEnded || !width || !height || (!image && source.readyState < 2)) {
       throw new Error('摄像头画面尚未准备好，请稍后重试。');
     }
 
-    const scale = Math.min(1, 1600 / Math.max(video.videoWidth, video.videoHeight));
+    const scale = Math.min(1, 1600 / Math.max(width, height));
     const canvas = document.createElement('canvas');
-    canvas.width = Math.round(video.videoWidth * scale);
-    canvas.height = Math.round(video.videoHeight * scale);
-    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.88);
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    try {
+      canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.88);
+    } catch (error) {
+      if (error.name === 'SecurityError') {
+        throw new Error('当前视频地址限制跨域取图。请使用同源视频地址，或在画面来源中选择电脑 / USB 摄像头。');
+      }
+      throw error;
+    }
   }
   function localMediaUrl(value) {
     if (typeof value !== 'string' || !value) return '';
@@ -281,7 +313,7 @@
     image.onerror = () => { photo.hidden = true; };
     image.src = source;
   }
-  async function describeScene(question = describeQuestion, fromVoice = false) {
+  async function describeScene(question = describeQuestion, fromVoice = false, { forceConnect = false } = {}) {
     if (busy) return;
     if (!localService) {
       const message = '请从本地启动器打开页面，再使用画面描述。';
@@ -306,9 +338,11 @@
     try {
       if (stopping) await stopping;
       if (ticket !== generation) return;
-      const image = config.mode === 'service' ? '' : captureBrowserPhoto();
+      const image = forceConnect ? '' : capturePreviewPhoto();
       const body = { text: question };
       if (image) body.image = image;
+      $('answer-scroll').scrollTop = 0;
+      selectMobilePanel('answer', true);
       descriptionInProgress = true;
       const response = await api('/api/describe', {
         method: 'POST',
@@ -327,8 +361,13 @@
       showDescriptionPhoto(localMediaUrl(response.image_url) || image);
       $('answer-badge').textContent = '画面描述';
       remember(question, response.answer, 'model');
-      announceDescription(answerAudioUrl ? '画面描述已就绪。' : '画面描述已就绪，使用浏览器朗读。');
       setBusy(false);
+      if (response.audio_deferred === true) {
+        $('description-audio-status').hidden = false;
+        announceDescription('预警语音优先，画面描述可稍后手动朗读。');
+        return;
+      }
+      announceDescription(answerAudioUrl ? '画面描述已就绪。' : '画面描述已就绪，使用浏览器朗读。');
       if (response.played === true) {
         serverPlayback = true;
         markPlaying();
@@ -338,7 +377,6 @@
       } else {
         await speakAnswer(true);
       }
-      if (config.mode !== 'demo') checkSavedService();
     } catch (error) {
       if (ticket !== generation) return;
       if (descriptionInProgress) stopSpeech();
@@ -352,6 +390,7 @@
         setBusy(false);
         if (!speechActive) setFlow('');
         requestController = null;
+        checkSavedService();
       }
     }
   }
@@ -365,6 +404,8 @@
     setBusy(true); setFlow('answer');
     $('answer-badge').textContent = config.mode === 'demo' ? '演示生成中' : '正在思考'; $('answer-badge').className = 'badge amber';
     $('answer-content').className = 'answer-content plain-answer busy-dots'; $('answer-content').textContent = config.mode === 'demo' ? '正在准备演示回答' : '正在等待模型回答';
+    $('answer-scroll').scrollTop = 0;
+    selectMobilePanel('answer', true);
     $('copy-answer').disabled = true; $('speak-answer').disabled = true;
     try {
       let result, model = '', kind = config.mode === 'demo' ? 'demo' : 'model';
@@ -546,11 +587,10 @@
     } catch { /* Status checks and recording responses still work without optional SSE. */ }
   }
   async function checkSavedService() {
-    serviceStatus = null; refreshConnection();
-    if (config.mode === 'demo') return;
-    const base = config.serviceUrl || localService;
+    const mode = config.mode;
+    const base = mode === 'demo' ? localService : config.serviceUrl || localService;
     if (!base) return;
-    const isCurrent = () => base === (config.serviceUrl || localService) && config.mode !== 'demo';
+    const isCurrent = () => mode === config.mode && (mode === 'demo' || base === (config.serviceUrl || localService));
     try {
       const data = validStatus(await api('/api/status', {}, base));
       if (isCurrent()) { serviceStatus = data; refreshConnection(); connectEvents(); }
@@ -708,22 +748,32 @@
   async function newSession() {
     await cancelWork(); currentId = uid(); setTranscript('', '等待输入'); emptyAnswer(); $('recording-time').textContent = '00:00'; $('audio-status').textContent = '新对话已准备好';
     $('audio-preview').pause(); $('audio-preview').removeAttribute('src'); $('audio-preview').hidden = true;
-    if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl); audioObjectUrl = ''; $('transcript').focus();
+    if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl); audioObjectUrl = '';
+    selectMobilePanel('input'); $('transcript').focus();
   }
 
   // UI binding. All model and recognition text is inserted as text, never as HTML.
   $('transcript').addEventListener('input', () => { updateCount(); $('transcript-badge').textContent = '可发送'; });
   $('send-button').addEventListener('click', sendQuestion);
+  $('mobile-conversation-input').addEventListener('click', () => selectMobilePanel('input'));
+  $('mobile-conversation-answer').addEventListener('click', () => selectMobilePanel('answer'));
   $('describe-button').addEventListener('click', () => {
     setTranscript(describeQuestion, '画面描述指令');
     describeScene();
   });
-  $('demo-button').addEventListener('click', () => { if (!busy && config.mode === 'demo') demoRecording(true); });
+  ringGestureToggle.disabled = !localService;
+  ringGestureToggle.addEventListener('click', () => {
+    ringGestureArmed = !ringGestureArmed;
+    ringGestureToggle.setAttribute('aria-pressed', String(ringGestureArmed));
+    if (ringGestureArmed) $('workspace-main').focus({ preventScroll: true });
+    toast(ringGestureArmed ? '戒指双击已启用，请保持声境页面在前台。' : '戒指双击已停用。');
+  });
+  $('demo-button').addEventListener('click', () => { if (!busy && config.mode === 'demo') { selectMobilePanel('input'); demoRecording(true); } });
   $('record-button').addEventListener('click', () => { if (recording) endRecording(); else if (!busy) { if (config.mode === 'demo') demoRecording(); else if (config.mode === 'browser') browserRecording(); else serviceRecordingStart(); } });
   $('upload-button').addEventListener('click', () => { $('audio-file').value = ''; $('audio-file').click(); });
   $('audio-file').addEventListener('change', () => importAudio($('audio-file').files[0]));
   $('video-file').addEventListener('change', () => { const file = $('video-file').files[0]; if (file) startUrlCamera('', file); $('video-file').value = ''; });
-  ['settings-button', 'sidebar-settings', 'device-settings'].forEach((id) => $(id).addEventListener('click', openSettings));
+  ['settings-button', 'sidebar-settings'].forEach((id) => $(id).addEventListener('click', openSettings));
   document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => $(button.dataset.close).close()));
   $('mode-select').addEventListener('change', modeHelp);
   $('test-connection').addEventListener('click', async () => {
@@ -769,7 +819,21 @@
     if (cameraPending || (cameraKind && cameraKind !== 'file')) stopCamera();
   });
   document.addEventListener('keydown', (event) => {
-    if ($('conversation-view')?.hidden) return;
+    // The ring sends one Enter through the Windows keyboard connection.
+    if (ringGestureArmed && event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+      if (busy || event.defaultPrevented || event.repeat || event.isComposing || event.keyCode === 229
+        || document.querySelector('dialog[open]') || event.target?.closest?.(interactiveTarget)
+        || document.activeElement?.closest(interactiveTarget)) return;
+      event.preventDefault();
+      if ($('conversation-view').hidden) {
+        $('workspace-nav').click();
+        $('workspace-main').focus({ preventScroll: true });
+      }
+      setTranscript(describeQuestion, '戒指双击指令');
+      describeScene(describeQuestion, false, { forceConnect: true });
+      return;
+    }
+    if ($('conversation-view').hidden) return;
     const editing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !$('settings-dialog').open && !$('history-dialog').open) { event.preventDefault(); sendQuestion(); }
     if (!editing && !event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === 'n' && !document.querySelector('dialog[open]')) { event.preventDefault(); newSession(); }
@@ -782,5 +846,6 @@
 
   for (let index = 0; index < 65; index++) { const bar = document.createElement('span'); const height = 5 + Math.abs(Math.sin(index * 1.72) * Math.sin(index * .31)) * 30; bar.style.setProperty('--bar-height', `${height}px`); bar.style.setProperty('--bar-delay', `${-(index % 9) * .09}s`); $('waveform').append(bar); }
   updateCount(); renderHistory(); applyMode();
-  if (config.mode !== 'demo') { setTranscript('', '等待输入'); emptyAnswer(); checkSavedService(); }
+  if (config.mode !== 'demo') { setTranscript('', '等待输入'); emptyAnswer(); }
+  checkSavedService();
 })();

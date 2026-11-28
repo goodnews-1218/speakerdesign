@@ -24,11 +24,13 @@ class RingWebStatusTests(unittest.TestCase):
         return RingMonitorSession(self.recordings / "connect_lab.exe", [], self.recordings,
                                   Mock(), self.device_lock, Mock())
 
-    def event(self, result=None, capture="ready", *, batch=1, times=(), demo=False):
-        event = self.recordings / "session-200" / "fall-alerts" / f"event-1-{batch}"
+    def event(self, result=None, capture="ready", *, batch=1, times=(), demo=False,
+              session=200, episode=1, onset_ms=None):
+        event = self.recordings / f"session-{session}" / "fall-alerts" / f"event-{episode}-{batch}"
         event.mkdir(parents=True, exist_ok=True)
-        (event / "ready").write_text(json.dumps({"version": 1, "demo": demo, "episode": 1, "batch": batch,
-                                               "status": capture, "times_ms": times}), encoding="utf-8")
+        (event / "ready").write_text(json.dumps({"version": 1, "demo": demo, "episode": episode, "batch": batch,
+                                               "status": capture, "times_ms": times, "onset_ms": onset_ms}),
+                                     encoding="utf-8")
         if result is not None:
             (event / "analysis.json").write_text(json.dumps(result), encoding="utf-8")
         for index in range(len(times)):
@@ -43,6 +45,21 @@ class RingWebStatusTests(unittest.TestCase):
         self.assertEqual(status["videos"], [])
         self.assertEqual(status["events"][0]["analysis_state"], "received")
         self.assertEqual(status["events"][0]["alarm_state"], "played")
+
+    def test_current_camera_frame_only_uses_fresh_running_preview(self):
+        preview = self.event().parent / "preview.jpg"
+        frame = b"\xff\xd8\xffpreview\xff\xd9"
+        preview.write_bytes(frame)
+        app = self.app()
+        self.assertIsNone(app.current_camera_frame())
+
+        app.state = "running"
+        self.assertEqual(app.current_camera_frame(), frame)
+        with patch("ring_web.time", return_value=preview.stat().st_mtime + 10):
+            self.assertIsNone(app.current_camera_frame())
+
+        preview.write_bytes(frame[:-2])
+        self.assertIsNone(app.current_camera_frame())
 
     def test_pending_request_is_visible_only_as_in_progress_while_active(self):
         self.event({"verdict": "pending", "analysis_state": "requesting", "alarm_state": "pending"})
@@ -107,6 +124,36 @@ class RingWebStatusTests(unittest.TestCase):
                          ("event-1", "suspected_fall", "played"))
         self.assertEqual([frame["time_ms"] for frame in item["frames"]], [-1000, 0, 1000])
         self.assertEqual({batch["analysis_state"] for batch in item["batches"]}, {"received", "skipped"})
+
+    def test_urgent_result_remains_visible_across_batches(self):
+        self.event({"verdict": "suspected_fall", "voice_state": "no_reply", "urgent": True,
+                    "alarm_state": "failed"})
+        self.event({"verdict": "suspected_fall", "voice_state": "unavailable", "urgent": True,
+                    "alarm_state": "played"}, batch=2)
+        item = self.app().status()["events"][0]
+        self.assertTrue(item["urgent"])
+        self.assertEqual(item["voice_state"], "no_reply")
+        self.assertFalse(item["batches"][1]["urgent"])
+        self.assertEqual(item["alarm_state"], "played")
+
+    def test_history_pages_survive_restart_and_keep_archived_frames_accessible(self):
+        for session in range(200, 218):
+            self.event({"verdict": "suspected_immobility", "voice_state": "no_reply", "urgent": True,
+                        "evidence": [{"frame": 1, "observation": "坐在桌前。"},
+                                     {"frame": 2, "observation": "保持坐姿。"}]},
+                       session=session, times=(-8000, -3000), onset_ms=-6000)
+        page = self.app().history()
+        self.assertEqual(len(page["events"]), 16)
+        app = self.app()
+        older = app.history(page["next_before"])
+        self.assertEqual([event["session_id"] for event in older["events"]], ["session-201", "session-200"])
+        self.assertIsNone(older["next_before"])
+        event = older["events"][1]
+        self.assertTrue(event["urgent"])
+        self.assertEqual(event["before"], ["坐在桌前。"])
+        self.assertEqual(event["after"], ["保持坐姿。"])
+        self.assertIsNotNone(app.media("session-200/fall-alerts/event-1-1/frame-000.jpg"))
+        self.assertIsNone(app.media("session-200/../session-217/fall-alerts/event-1-1/frame-000.jpg"))
 
     @patch("ring_web.play_alarm")
     def test_audition_is_local_and_releases_device_after_failure(self, play_alarm):

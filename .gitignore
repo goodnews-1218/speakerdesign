@@ -4,3 +4,4 @@ recordings/
 .vs/
 CMakeUserPresets.json
 /scripts/deepseek.local.toml
+/ring-integration/RingBridge.exe

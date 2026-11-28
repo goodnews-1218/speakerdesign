@@ -1,7 +1,7 @@
 """Regressions for the ring alert consumer without a device, cloud, or audio output."""
 
 import base64
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 import io
 import json
 from pathlib import Path
@@ -71,11 +71,14 @@ class RingAlertTests(unittest.TestCase):
             (directory / "ready.tmp").replace(directory / "ready")
         return directory
 
-    def consume(self, *, analyze_demo=False):
+    def consume(self, *, analyze_demo=False, reply="no_reply"):
         finished = Event()
         finished.set()
-        with patch.object(ring_alert, "winsound", self.sound), redirect_stdout(io.StringIO()):
+        with (patch.object(ring_alert, "winsound", self.sound),
+              patch.object(ring_alert, "listen_for_reply", return_value=reply) as listening,
+              redirect_stdout(io.StringIO())):
             ring_alert.watch_events(self.root, self.client, finished, Event(), analyze_demo=analyze_demo)
+        return listening
 
     @staticmethod
     def result(directory):
@@ -92,6 +95,7 @@ class RingAlertTests(unittest.TestCase):
         self.consume()
         result = self.result(directory)
         self.assertTrue(result["alarm_played"])
+        self.assertTrue(result["urgent"])
         self.assertEqual((result["analysis_state"], result["alarm_state"]), ("received", "played"))
         self.client.complete.assert_called_once()
         request = self.client.complete.call_args.args[0][1]["content"]
@@ -117,6 +121,37 @@ class RingAlertTests(unittest.TestCase):
         self.client.complete.assert_called_once()
         self.sound.PlaySound.assert_called_once()
 
+    def test_priority_audio_covers_confirmation_and_alarm(self):
+        event = self.make_event(1)
+        audio_steps = []
+
+        @contextmanager
+        def reserve_audio():
+            audio_steps.append("reserved")
+            try:
+                yield
+            finally:
+                audio_steps.append("released")
+
+        def complete(*args, **kwargs):
+            audio_steps.append("vision")
+            return self.client.complete.return_value
+
+        def listen(*args):
+            audio_steps.append("confirmation")
+            return "needs_help"
+
+        self.client.complete.side_effect = complete
+        self.sound.PlaySound.side_effect = lambda *_: audio_steps.append("alarm")
+        finished = Event()
+        finished.set()
+        with (patch.object(ring_alert, "winsound", self.sound),
+              patch.object(ring_alert, "listen_for_reply", side_effect=listen),
+              redirect_stdout(io.StringIO())):
+            ring_alert.watch_events(self.root, self.client, finished, Event(), priority_audio=reserve_audio)
+        self.assertEqual(audio_steps, ["vision", "reserved", "confirmation", "alarm", "released"])
+        self.assertTrue(self.result(event)["alarm_played"])
+
     def test_demo_incomplete_and_duplicate_frames_stay_local(self):
         demo = self.make_event(1, demo=True)
         incomplete = self.make_event(2, status="insufficient", photos=())
@@ -130,18 +165,18 @@ class RingAlertTests(unittest.TestCase):
         self.client.complete.assert_not_called()
         self.sound.PlaySound.assert_not_called()
 
-    def test_demo_opt_in_analyzes_camera_frames_without_playing_alarm(self):
+    def test_demo_opt_in_runs_analysis_voice_and_alarm(self):
         event = self.make_event(1, demo=True)
         incomplete = self.make_event(2, demo=True, status="insufficient", photos=())
 
         def complete(*_, **__):
             pending = self.result(event)
             self.assertTrue(pending["analyze_demo"])
-            self.assertEqual((pending["analysis_state"], pending["alarm_state"]), ("requesting", "skipped"))
+            self.assertEqual((pending["analysis_state"], pending["alarm_state"]), ("requesting", "pending"))
             return json.dumps(suspected_fall_response())
 
         self.client.complete.side_effect = complete
-        self.consume(analyze_demo=True)
+        self.consume(analyze_demo=True).assert_called_once()
 
         self.client.complete.assert_called_once()
         content = self.client.complete.call_args.args[0][1]["content"]
@@ -150,13 +185,119 @@ class RingAlertTests(unittest.TestCase):
         self.assertEqual(photos, list(PHOTOS))
         result = self.result(event)
         self.assertEqual((result["verdict"], result["analysis_state"]), ("suspected_fall", "received"))
-        self.assertEqual((result["alarm_state"], result["alarm_reason"]), ("skipped", "demo"))
+        self.assertEqual((result["alarm_state"], result["voice_state"]), ("played", "no_reply"))
         self.assertTrue(result["analyze_demo"])
-        self.assertFalse(result["alarm_played"])
+        self.assertTrue(result["alarm_played"])
         skipped = self.result(incomplete)
         self.assertTrue(skipped["analyze_demo"])
         self.assertEqual(skipped["analysis_state"], "skipped")
+        self.sound.PlaySound.assert_called_once()
+
+    def test_acknowledged_reply_skips_alarm_for_the_episode(self):
+        first = self.make_event(1, episode=4)
+        second = self.make_event(2, episode=4)
+        self.consume(reply="acknowledged").assert_called_once()
+        self.assertCountEqual([self.result(first)["verdict"], self.result(second)["verdict"]],
+                              ["suspected_fall", "acknowledged"])
+        for marker in (first, second):
+            self.assertEqual(self.result(marker)["alarm_reason"], "voice_acknowledged")
         self.sound.PlaySound.assert_not_called()
+
+    def test_seated_slump_checks_voice_and_escalates_on_no_reply(self):
+        response = suspected_fall_response()
+        response["evidence"][0]["observation"] = "同一人坐在座位上。"
+        response["evidence"][1].update(posture="slumped", observation="同一人突然瘫软趴在桌上。")
+        self.client.complete.return_value = json.dumps(response)
+        event = self.make_event(1)
+        self.consume().assert_called_once()
+        result = self.result(event)
+        self.assertTrue(result["urgent"])
+        self.assertTrue(result["alarm_played"])
+
+    def test_failed_voice_check_still_plays_alarm_without_marking_no_reply(self):
+        event = self.make_event(1)
+        self.consume(reply="unavailable").assert_called_once()
+        result = self.result(event)
+        self.assertTrue(result["alarm_played"])
+        self.assertEqual(result["voice_state"], "unavailable")
+        self.assertFalse(result.get("urgent", False))
+
+    def test_explicit_help_plays_alarm_and_records_the_reason(self):
+        event = self.make_event(1)
+        self.consume(reply="needs_help").assert_called_once()
+        result = self.result(event)
+        self.assertTrue(result["alarm_played"])
+        self.assertEqual(result["voice_state"], "needs_help")
+        self.assertEqual(result["alarm_reason"], "voice_needs_help")
+
+    def test_stillness_needs_sustained_post_alert_evidence(self):
+        response = {"verdict": "suspected_immobility", "summary": "同一人坐在座位上，未见明显动作。",
+                    "evidence": [{"frame": n, "posture": "seated", "observation": "仍坐在原处。"}
+                                 for n in range(1, 4)]}
+        self.client.complete.return_value = json.dumps(response)
+        valid = self.make_event(1, times=(300, 3300, 6300))
+        for n, times in enumerate(((-3000, 0, 3000), (0, 2000, 4000), (0, 2000, 7000)), 2):
+            self.make_event(n, times=times)
+        self.consume(reply="no_reply").assert_called_once()
+        self.assertTrue(self.result(valid)["alarm_played"])
+        self.assertTrue(self.result(valid)["urgent"])
+        for n in range(2, 5):
+            self.assertEqual(self.result(self.root / f"event-{n}")["verdict"], "uncertain")
+
+        for evidence in response["evidence"]:
+            evidence["posture"] = "upright_or_seated"
+        self.client.complete.return_value = json.dumps(response)
+        self.assertEqual(assess_fall(self.client, list(zip((300, 3300, 6300), PHOTOS))).verdict, "uncertain")
+
+    def test_voice_sends_only_post_prompt_audio_and_uses_semantic_classification(self):
+        mic_path = self.root / "mic.wav"
+        sound = io.BytesIO()
+        with wave.open(sound, "wb") as wav:
+            wav.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+            wav.writeframes(b"\x00\x00" * 100)
+        self.client.synthesize.return_value = sound.getvalue()
+        cases = (
+            ("我沒有受傷，不用幫忙。", '{"intent":"safe"}', "acknowledged"),
+            ("我摔倒了，救命！", '{"intent":"needs_help"}', "needs_help"),
+            ("我没事，但是我站不起来。", '{"intent":"needs_help"}', "needs_help"),
+            ("喂，听见了。", '{"intent":"unclear"}', "unconfirmed"),
+            ("喂。", '{"intent":"safe","other":true}', "unconfirmed"),
+            ("喂。", APIError("语义判断超时。"), "unavailable"),
+            ("   ", None, "no_reply"),
+        )
+        for transcript, response, expected in cases:
+            with self.subTest(transcript=transcript):
+                mic_path.write_bytes(sound.getvalue())
+                self.client.transcribe.return_value = transcript
+                self.client.complete.reset_mock()
+                self.client.complete.side_effect = response if isinstance(response, APIError) else None
+                self.client.complete.return_value = response
+                cancel = Mock()
+                cancel.is_set.return_value = False
+                new_pcm = b"\x00\x04" * 1000
+
+                def feed(seconds):
+                    if seconds == 0.25:
+                        with mic_path.open("ab") as audio:
+                            audio.write(new_pcm * 4)
+                    return False
+
+                cancel.wait.side_effect = feed
+                progress = Mock()
+                with patch.object(ring_alert, "winsound", self.sound):
+                    reply = ring_alert.listen_for_reply(self.client, mic_path, cancel, None, progress)
+                self.assertEqual(reply, expected)
+                with wave.open(io.BytesIO(self.client.transcribe.call_args.args[0]), "rb") as sent:
+                    self.assertEqual(sent.readframes(sent.getnframes()), new_pcm * 128)
+                if response is None:
+                    self.client.complete.assert_not_called()
+                    continue
+                progress.assert_called_with("interpreting")
+                self.client.complete.assert_called_once()
+                messages = self.client.complete.call_args.args[0]
+                self.assertEqual([message["role"] for message in messages], ["system", "user"])
+                self.assertEqual(json.loads(messages[1]["content"]), {"transcript": transcript})
+                self.assertTrue(self.client.complete.call_args.kwargs["json_output"])
 
     def test_bad_marker_and_upstream_error_do_not_play_alarm(self):
         invalid = self.make_event(1, times=(-500, -500, 500))

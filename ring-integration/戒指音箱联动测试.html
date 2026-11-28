@@ -1,20 +1,27 @@
 <!doctype html>
 <html lang="zh-CN">
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>戒指音箱联动测试</title>
 <style>
 body{font:18px/1.65 system-ui,sans-serif;max-width:720px;margin:8vh auto;padding:0 24px;color:#163047;background:#f2f7fa}
 button{font:inherit;background:#135b72;color:white;border:0;border-radius:8px;padding:10px 18px;cursor:pointer}
 #status{padding:18px;border:1px solid #b6cdd9;border-radius:8px;background:white}
 .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px}.metrics div{background:white;border:1px solid #b6cdd9;border-radius:8px;padding:12px}.metrics dd{margin:4px 0;font-weight:650}button:disabled{opacity:.55;cursor:default}
+#scene-photo{display:block;max-width:100%;max-height:320px;border-radius:8px}#scene-photo[hidden]{display:none}
 </style>
+<p><a href="/">返回 Connect Studio</a></p>
 <h1>戒指音箱联动测试</h1>
 <p>点一次「开始测试」，确认听到短提示音。测试时保持这个页面在前台。</p>
 <button id="start">开始测试</button>
-<p>4 秒内做两次向下动作，播报「我摔倒了」。双击触摸区，查询并播报当前天气。</p>
-<p><label for="city">城市</label> <input id="city" placeholder="例如 杭州" autocomplete="off"> <button id="weather">播报天气</button></p>
-<p><small>天气数据由 <a href="https://open-meteo.com/">Open-Meteo</a> 提供。</small></p>
+<p>双击戒指触摸区，拍摄并播报音箱看到的画面。4 秒内做两次向下动作，播报「我摔倒了」。</p>
+<p><button id="describe">描述当前画面</button></p>
 <p id="status" role="status" aria-live="polite">等待开始</p>
+<section id="scene" aria-labelledby="scene-heading" hidden>
+<h2 id="scene-heading">画面描述</h2>
+<p id="scene-description"></p>
+<img id="scene-photo" alt="音箱拍摄的画面" hidden>
+</section>
 <section aria-labelledby="health-heading">
 <h2 id="health-heading">戒指生理指标</h2>
 <dl class="metrics">
@@ -23,6 +30,7 @@ button{font:inherit;background:#135b72;color:white;border:0;border-radius:8px;pa
   <div><dt>戒指测得温度</dt><dd id="ring-temperature">—</dd></div>
 </dl>
 <p><button id="connect-ring">连接戒指蓝牙数据</button> <button id="reconnect-ring">重连已授权戒指</button> <button id="scan-all">显示全部附近设备</button> <button id="measure-ring" disabled>开始测量</button></p>
+<p><button id="measure-windows" hidden>使用 Windows 已配对的戒指测量</button></p>
 <p id="health-status" role="status">请戴好戒指，测量时保持手部静止。</p>
 </section>
 <script>
@@ -51,79 +59,132 @@ start.addEventListener('click', async () => {
     status.textContent = '无法启用音频，请重新点开始测试。';
   }
 });
-const city = document.getElementById('city');
-let weatherRequest;
-const conditions = {
-  0:'晴', 1:'大部晴朗', 2:'局部多云', 3:'阴', 45:'有雾', 48:'有雾凇',
-  51:'小毛毛雨', 53:'毛毛雨', 55:'较强毛毛雨', 56:'冻毛毛雨', 57:'冻毛毛雨',
-  61:'小雨', 63:'中雨', 65:'大雨', 66:'冻雨', 67:'冻雨',
-  71:'小雪', 73:'中雪', 75:'大雪', 77:'雪粒', 80:'小阵雨', 81:'阵雨',
-  82:'强阵雨', 85:'阵雪', 86:'强阵雪', 95:'雷暴', 96:'雷暴伴冰雹', 99:'雷暴伴冰雹'
-};
+const describeButton = document.getElementById('describe');
+const scene = document.getElementById('scene');
+const sceneDescription = document.getElementById('scene-description');
+const scenePhoto = document.getElementById('scene-photo');
+const isStudioPage = location.protocol === 'http:' &&
+  location.pathname.replace(/\/$/, '') === '/ring-integration';
+const scenePlayer = new Audio();
+let sceneRequest;
+let serverSpeechUntil = 0;
 
-async function weatherJson(endpoint, parameters, signal) {
-  const response = await fetch(endpoint + '?' + new URLSearchParams(parameters), {signal});
-  if (!response.ok) throw new Error('天气服务请求失败');
-  return response.json();
+async function postJson(path, payload, signal) {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+    signal,
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || '本机服务请求失败。');
+  return result;
 }
 
-function weatherSpeech(message) {
-  status.textContent = message;
+function mediaUrl(value) {
+  if (typeof value !== 'string' || !value.startsWith('/api/media/')) return '';
+  const url = new URL(value, location.origin);
+  return url.pathname.startsWith('/api/media/') ? url.href : '';
+}
+
+function speak(message) {
   const speech = new SpeechSynthesisUtterance(message);
   speech.lang = 'zh-CN';
+  speech.onerror = event => {
+    if (event.error !== 'canceled' && event.error !== 'interrupted') {
+      status.textContent = '浏览器未能播放语音。';
+    }
+  };
   speechSynthesis.speak(speech);
 }
 
-async function reportWeather() {
-  if (audio?.state !== 'running' || performance.now() < nextAlarm) return;
-  weatherRequest?.abort();
-  const name = city.value.trim();
-  speechSynthesis.cancel();
-  if (!name) {
-    weatherSpeech('请先输入要查询的城市。');
+async function reportScene() {
+  if (sceneRequest || performance.now() < nextAlarm) return;
+  if (!isStudioPage) {
+    status.textContent = '请运行 frontend/start.cmd，从 Connect Studio 打开戒指联动。';
     return;
   }
+  speechSynthesis.cancel();
+  scenePlayer.pause();
   const request = new AbortController();
-  weatherRequest = request;
-  const timeout = setTimeout(() => request.abort('timeout'), 10000);
-  status.textContent = '正在查询 ' + name + ' 的天气…';
+  sceneRequest = request;
+  const timeout = setTimeout(() => request.abort('timeout'), 100000);
+  describeButton.disabled = true;
+  status.textContent = '正在获取音箱画面，等待模型回答…';
   try {
-    const place = await weatherJson('https://geocoding-api.open-meteo.com/v1/search',
-      {name, count: '1', language: 'zh'}, request.signal);
-    const location = place.results?.[0];
-    if (!location) {
-      weatherSpeech('没有找到这个城市，可以试试去掉市字或输入拼音。');
+    const result = await postJson('/api/describe', {text: '描述一下你看到的画面'}, request.signal);
+    if (request.signal.aborted) return;
+    if (typeof result.answer !== 'string' || !result.answer.trim()) {
+      throw new Error('模型没有返回画面描述。');
+    }
+    sceneDescription.textContent = result.answer;
+    const photo = mediaUrl(result.image_url);
+    scenePhoto.hidden = !photo;
+    if (photo) scenePhoto.src = photo;
+    else scenePhoto.removeAttribute('src');
+    scene.hidden = false;
+    if (result.audio_deferred === true) {
+      status.textContent = '画面描述已生成。安全播报优先，本次仅显示文字。';
       return;
     }
-    const forecast = await weatherJson('https://api.open-meteo.com/v1/forecast',
-      {latitude: location.latitude, longitude: location.longitude,
-        current: 'temperature_2m,apparent_temperature,weather_code', timezone: 'auto'}, request.signal);
-    const current = forecast.current;
-    if (!Number.isFinite(current?.temperature_2m)) throw new Error('缺少当前气温');
-    const area = [...new Set([location.admin1, location.name].filter(Boolean))].join('，');
-    const condition = conditions[current.weather_code];
-    const feelsLike = Number.isFinite(current.apparent_temperature)
-      ? '，体感温度 ' + Math.round(current.apparent_temperature) + ' 摄氏度' : '';
-    weatherSpeech(area + '，当前' + (condition ? condition + '，' : '') +
-      '气温 ' + Math.round(current.temperature_2m) + ' 摄氏度' + feelsLike + '。');
-  } catch {
-    if (!request.signal.aborted || request.signal.reason === 'timeout') {
-      weatherSpeech('暂时无法获取天气，请检查网络后再试。');
+    status.textContent = '画面描述已生成。';
+    if (result.played === true) {
+      serverSpeechUntil = performance.now() + (Number(result.audio_duration_ms) || 0);
+      return;
+    }
+    const wav = mediaUrl(result.audio_url);
+    if (wav) {
+      scenePlayer.src = wav;
+      try {
+        await scenePlayer.play();
+        return;
+      } catch {
+        if (request.signal.aborted) return;
+      }
+    }
+    speak(result.answer);
+  } catch (error) {
+    if (request.signal.reason === 'timeout') {
+      status.textContent = '画面描述请求超时，请稍后重试。';
+    } else if (!request.signal.aborted) {
+      status.textContent = '画面描述失败 · ' + error.message;
     }
   } finally {
     clearTimeout(timeout);
-    if (weatherRequest === request) weatherRequest = null;
+    sceneRequest = undefined;
+    describeButton.disabled = false;
   }
 }
-document.getElementById('weather').addEventListener('click', reportWeather);
+
+async function reportFall() {
+  const stopServerSpeech = sceneRequest || performance.now() < serverSpeechUntil;
+  sceneRequest?.abort('alarm');
+  scenePlayer.pause();
+  speechSynthesis.cancel();
+  if (stopServerSpeech && isStudioPage) {
+    try {
+      await postJson('/api/playback/stop', {}, AbortSignal.timeout(1000));
+    } catch {
+      // Keep the gesture's local speech available if the service cannot be reached.
+    }
+  }
+  speak('我摔倒了');
+  status.textContent = '已触发求救语音';
+}
+
+describeButton.addEventListener('click', () => {
+  describeButton.blur();
+  void reportScene();
+});
 window.addEventListener('keydown', event => {
-  if (event.target === city) return;
+  if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey ||
+      event.target.closest?.('input, textarea, select, button, a, [contenteditable]')) return;
   if (audio?.state !== 'running' || !['PageUp', 'PageDown', 'Enter'].includes(event.key)) return;
   event.preventDefault();
   if (event.repeat) return;
   if (event.key === 'Enter') {
     motions.length = 0;
-    void reportWeather();
+    void reportScene();
     return;
   }
   if (event.key === 'PageUp') return;
@@ -135,29 +196,27 @@ window.addEventListener('keydown', event => {
   if (motions.length === 2) {
     motions.length = 0;
     nextAlarm = now + 2500;
-    weatherRequest?.abort();
-    speechSynthesis.cancel();
-    const alarm = new SpeechSynthesisUtterance('我摔倒了');
-    alarm.lang = 'zh-CN';
-    alarm.onerror = () => { status.textContent = '已触发求救，但浏览器未能播放语音。'; };
-    speechSynthesis.speak(alarm);
-    status.textContent = '已触发求救语音';
+    void reportFall();
   }
 });
 const connectRing = document.getElementById('connect-ring');
 const measureRing = document.getElementById('measure-ring');
+const measureWindows = document.getElementById('measure-windows');
+measureWindows.hidden = !isStudioPage;
 const healthStatus = document.getElementById('health-status');
 const metrics = ['heart-rate', 'oxygen', 'ring-temperature'].map(id => document.getElementById(id));
 const ringUuid = part => 'bae8' + part + '-4f05-4503-8e65-3af1f7329d1f';
 let ringDevice;
 let ringCommand;
 let measurement;
+let measuringWithWindows = false;
 let ringSequence = 0;
 
 function finishMeasurement(message) {
   clearTimeout(measurement?.timer);
   measurement = undefined;
-  measureRing.disabled = !ringCommand;
+  measureRing.disabled = !ringCommand || measuringWithWindows;
+  measureWindows.disabled = measuringWithWindows;
   healthStatus.textContent = message;
 }
 
@@ -251,7 +310,7 @@ async function connectHealth(showAll, previouslyAuthorized = false) {
     if (!server.connected) throw new Error('戒指已断开');
     ringCommand = command;
     connectRing.textContent = '断开蓝牙数据';
-    measureRing.disabled = false;
+    measureRing.disabled = measuringWithWindows;
     healthStatus.textContent = device.name + ' 已连接，可以开始测量。';
   } catch (error) {
     if (ringDevice?.gatt.connected) ringDevice.gatt.disconnect();
@@ -266,8 +325,9 @@ async function connectHealth(showAll, previouslyAuthorized = false) {
 }
 
 measureRing.addEventListener('click', async () => {
-  if (!ringCommand || measurement) return;
+  if (!ringCommand || measurement || measuringWithWindows) return;
   measureRing.disabled = true;
+  measureWindows.disabled = true;
   metrics.forEach(metric => { metric.textContent = '—'; });
   const sequence = ringSequence = ringSequence % 255 + 1;
   const request = {
@@ -282,41 +342,27 @@ measureRing.addEventListener('click', async () => {
     if (measurement === request) finishMeasurement('测量命令发送失败 · ' + error.message);
   }
 });
-if (location.origin === 'http://127.0.0.1:8765') {
-  for (const button of [connectRing, reconnectRing, scanAll]) button.hidden = true;
-  measureRing.disabled = false;
-  healthStatus.textContent = '使用 Windows 已配对的戒指。戴好戒指后点击开始测量。';
-  measureRing.addEventListener('click', async () => {
-    measureRing.disabled = true;
-    metrics.forEach(metric => { metric.textContent = '—'; });
-    healthStatus.textContent = '正在从 Windows 读取戒指，请保持手部静止。';
-    try {
-      const response = await fetch('/measure', {method:'POST', headers:{'X-Ring-Measure':'1'}});
-      if (!response.ok) throw new Error(await response.text());
-      const {heart, oxygen, temperature} = await response.json();
-      metrics[0].textContent = heart == null ? '—' : heart + ' 次/分';
-      metrics[1].textContent = oxygen == null ? '—' : oxygen + '%';
-      metrics[2].textContent = temperature == null ? '—' : temperature.toFixed(2) + ' °C';
-      healthStatus.textContent = metrics.some(metric => metric.textContent === '—')
-        ? '测量结束，部分指标未收到有效读数。' : '测量完成。';
-    } catch (error) {
-      healthStatus.textContent = 'Windows 测量失败 · ' + error.message;
-    } finally {
-      measureRing.disabled = false;
-    }
-  });
-}
+measureWindows.addEventListener('click', async () => {
+  if (!isStudioPage || measurement || measuringWithWindows) return;
+  measuringWithWindows = true;
+  measureRing.disabled = true;
+  measureWindows.disabled = true;
+  metrics.forEach(metric => { metric.textContent = '—'; });
+  healthStatus.textContent = '正在从 Windows 读取戒指，请保持手部静止。';
+  try {
+    const {heart, oxygen, temperature} = await postJson('/api/ring/measure', {});
+    metrics[0].textContent = heart == null ? '—' : heart + ' 次/分';
+    metrics[1].textContent = oxygen == null ? '—' : oxygen + '%';
+    metrics[2].textContent = Number.isFinite(temperature) ? temperature.toFixed(2) + ' °C' : '—';
+    healthStatus.textContent = metrics.some(metric => metric.textContent === '—')
+      ? '测量结束，部分指标未收到有效读数。' : '测量完成。';
+  } catch (error) {
+    healthStatus.textContent = 'Windows 测量失败 · ' + error.message;
+  } finally {
+    measuringWithWindows = false;
+    measureRing.disabled = !ringCommand;
+    measureWindows.disabled = false;
+  }
+});
 </script>
 </html>
-
-
-
-
-
-
-
-
-
-
-
-

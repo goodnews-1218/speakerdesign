@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -13,6 +13,7 @@ using Windows.Storage.Streams;
 class RingBridge
 {
     const string Address = "http://127.0.0.1:8765/";
+    const string StudioPage = "http://127.0.0.1:4173/ring-integration/";
     const string Ring = "BCL6039F5A";
     static int sequence;
     static Guid Uuid(string part) { return new Guid("bae8" + part + "-4f05-4503-8e65-3af1f7329d1f"); }
@@ -24,10 +25,13 @@ class RingBridge
             if (args.Contains("--measure")) Console.WriteLine(Measure().GetAwaiter().GetResult());
             else if (args.Contains("--check-page")) {
                 var server = Serve();
-                using (var client = new WebClient()) {
-                    client.Proxy = null;
-                    if (!client.DownloadString(Address).Contains("X-Ring-Measure"))
-                        throw new InvalidOperationException("页面内容检查失败。");
+                var request = (HttpWebRequest)WebRequest.Create(Address);
+                request.Proxy = null;
+                request.AllowAutoRedirect = false;
+                using (var response = (HttpWebResponse)request.GetResponse()) {
+                    if (response.StatusCode != HttpStatusCode.Redirect ||
+                        response.Headers[HttpResponseHeader.Location] != StudioPage)
+                        throw new InvalidOperationException("戒指联动页面跳转检查失败。");
                 }
                 Console.WriteLine("网页桥接检查成功。");
             } else Serve().GetAwaiter().GetResult();
@@ -114,21 +118,19 @@ class RingBridge
 
     static async Task Serve()
     {
-        string page = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "戒指音箱联动测试.html");
-        if (!File.Exists(page)) throw new FileNotFoundException("请将此程序和戒指音箱联动测试.html 放在同一个文件夹。");
         var server = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 8765);
         server.Start();
-        Console.WriteLine("戒指测量服务已启动。请在 Edge 打开 " + Address);
+        Console.WriteLine("戒指测量服务已启动。运行 frontend/start.cmd 后，请打开 " + StudioPage);
         Console.WriteLine("保留这个窗口，关闭窗口即可停止服务。");
         while (true) {
             using (var client = await server.AcceptTcpClientAsync()) {
-                try { Respond(client.GetStream(), page); }
+                try { Respond(client.GetStream()); }
                 catch (IOException) { }
             }
         }
     }
 
-    static void Respond(System.Net.Sockets.NetworkStream stream, string page)
+    static void Respond(System.Net.Sockets.NetworkStream stream)
     {
         stream.ReadTimeout = 2000;
         var header = new StringBuilder();
@@ -145,7 +147,7 @@ class RingBridge
         if (!has("Host: 127.0.0.1:8765")) {
             Reply(stream, "404 Not Found", "text/plain", "找不到这个请求。");
         } else if (lines[0] == "GET / HTTP/1.1") {
-            Reply(stream, "200 OK", "text/html", File.ReadAllText(page));
+            Reply(stream, "302 Found", "text/plain", "请从 Connect Studio 打开戒指联动页面。", StudioPage);
         } else if (lines[0] == "POST /measure HTTP/1.1" &&
                    has("Origin: " + Address.TrimEnd('/')) && has("X-Ring-Measure: 1")) {
             string result;
@@ -157,13 +159,14 @@ class RingBridge
         }
     }
 
-    static void Reply(Stream stream, string status, string type, string text)
+    static void Reply(Stream stream, string status, string type, string text, string location = null)
     {
         byte[] body = Encoding.UTF8.GetBytes(text);
+        string locationHeader = location == null ? "" : "Location: " + location + "\r\n";
         byte[] header = Encoding.ASCII.GetBytes("HTTP/1.1 " + status + "\r\nContent-Type: " + type +
-            "; charset=utf-8\r\nContent-Length: " + body.Length + "\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n");
+            "; charset=utf-8\r\nContent-Length: " + body.Length + "\r\n" + locationHeader +
+            "Cache-Control: no-store\r\nConnection: close\r\n\r\n");
         stream.Write(header, 0, header.Length);
         stream.Write(body, 0, body.Length);
     }
 }
-

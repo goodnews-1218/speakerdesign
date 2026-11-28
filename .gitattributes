@@ -1,0 +1,2 @@
+frontend/start.cmd text eol=crlf
+ring-integration/build.cmd text eol=crlf

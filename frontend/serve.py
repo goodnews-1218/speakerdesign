@@ -4,8 +4,10 @@ import argparse
 import base64
 import binascii
 from collections import OrderedDict
+from contextlib import contextmanager
 from email import policy
 from email.parser import BytesParser
+from http.client import HTTPConnection, HTTPException
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -29,6 +31,8 @@ except ImportError:
 
 
 FRONTEND = Path(__file__).resolve().parent
+RING_INTEGRATION_PAGE = FRONTEND.parent / "ring-integration" / "戒指音箱联动测试.html"
+RING_BRIDGE_PORT = 8765
 DEFAULT_BIN = FRONTEND.parent / "build-student" / "Release"
 MAX_JPEG = 12 * 1024 * 1024
 DEFAULT_COMMAND = "描述一下你看到的画面"
@@ -63,24 +67,47 @@ class Playback:
     def __init__(self):
         self.lock = Lock()
         self.generation = 0
+        self.safety_generation = 0
+        self.safety_active = False
         self.directory = TemporaryDirectory(prefix="connect-playback-") if winsound else None
 
     def stop(self):
         with self.lock:
-            self.generation += 1
-            if winsound:
-                target = Path(self.directory.name) / "response.wav"
+            return self._stop()
+
+    def _stop(self):
+        self.generation += 1
+        if self.directory and not self.safety_active:
+            target = Path(self.directory.name) / "response.wav"
+            if target.exists():
                 try:
-                    if target.exists():
-                        winsound.PlaySound(None, 0)
-                        target.unlink(missing_ok=True)
+                    winsound.PlaySound(None, 0)
                 except (OSError, RuntimeError):
                     pass
-            return self.generation
+                try:
+                    target.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return self.generation
+
+    @contextmanager
+    def safety_audio(self):
+        with self.lock:
+            self.safety_generation = self._stop()
+            self.safety_active = True
+        try:
+            yield
+        finally:
+            with self.lock:
+                self.safety_active = False
+
+    def safety_interrupted(self, generation):
+        with self.lock:
+            return self.safety_active or generation < self.safety_generation
 
     def play(self, wav, generation):
         with self.lock:
-            if not winsound or generation != self.generation:
+            if not winsound or self.safety_active or generation != self.generation:
                 return False
             target = Path(self.directory.name) / "response.wav"
             target.write_bytes(wav)
@@ -99,6 +126,7 @@ class ConnectStudio:
         self.device_args = device_args
         self.device_lock = Lock()
         self.describe_lock = Lock()
+        self.ring_measure_lock = Lock()
         self.device_connected = None
         self.recorder = Recorder(bin_dir / "connect_lab.exe", device_args, self.device_lock)
         self.deepseek = DeepSeek(key_file)
@@ -106,7 +134,8 @@ class ConnectStudio:
         self.playback = Playback()
         self.ring = RingMonitorSession(bin_dir / "connect_lab.exe", device_args,
                                        FRONTEND.parent / "recordings", self.deepseek,
-                                       self.device_lock, self.playback.stop)
+                                       self.device_lock, self.playback.stop,
+                                       priority_audio=self.playback.safety_audio)
 
     def status(self):
         key = self.deepseek.key()
@@ -148,6 +177,38 @@ class ConnectStudio:
         finally:
             self.device_lock.release()
 
+    def measure_ring(self):
+        if not self.ring_measure_lock.acquire(blocking=False):
+            raise APIError("戒指正在测量，请等待当前测量结束。", 409)
+        bridge = HTTPConnection("127.0.0.1", RING_BRIDGE_PORT, timeout=65)
+        try:
+            bridge.request("POST", "/measure", body=b"", headers={
+                "Origin": f"http://127.0.0.1:{RING_BRIDGE_PORT}", "X-Ring-Measure": "1",
+            })
+            response = bridge.getresponse()
+            body = response.read(4097)
+            if len(body) > 4096:
+                raise APIError("戒指测量服务返回的数据过大。", 502)
+            if response.status != 200:
+                raise APIError(body.decode("utf-8", errors="replace").strip()[:300] or "戒指测量失败。", 503)
+            result = json.loads(body)
+            fields = ("heart", "oxygen", "temperature")
+            if not isinstance(result, dict) or any(
+                field not in result or (result[field] is not None and type(result[field]) not in (int, float))
+                for field in fields
+            ):
+                raise APIError("戒指测量服务返回的格式不正确。", 502)
+            return {field: result[field] for field in fields}
+        except TimeoutError as error:
+            raise APIError("等待戒指测量超时，请检查佩戴和蓝牙连接。", 504) from error
+        except (OSError, HTTPException) as error:
+            raise APIError("无法连接 Windows 戒指测量服务，请先运行 RingBridge.exe。", 503) from error
+        except (ValueError, UnicodeError) as error:
+            raise APIError("戒指测量服务返回了无法读取的数据。", 502) from error
+        finally:
+            bridge.close()
+            self.ring_measure_lock.release()
+
     def describe(self, payload):
         self.deepseek.require_key()
         command = question(payload, fallback=DEFAULT_COMMAND)
@@ -156,7 +217,14 @@ class ConnectStudio:
         try:
             playback_generation = self.playback.stop()
             browser_image = "image" in payload
-            photo = decode_browser_photo(payload["image"]) if browser_image else self.capture()
+            monitor_frame = None if browser_image else self.ring.current_camera_frame()
+            if browser_image:
+                photo = decode_browser_photo(payload["image"])
+            elif monitor_frame is not None:
+                photo = check_jpeg(monitor_frame, 502)
+                self.device_connected = True
+            else:
+                photo = self.capture()
             answer = self.deepseek.chat(command, photo)
             result = {
                 "answer": answer, "model": MODEL, "audio_url": None, "played": False,
@@ -167,7 +235,9 @@ class ConnectStudio:
                 wav = self.deepseek.synthesize(answer)
                 result["audio_url"] = self.media.put(".wav", "audio/wav", wav)
                 result["audio_duration_ms"] = round((len(wav) - 44) / 48)
-                if self.device_lock.acquire(blocking=False):
+                if monitor_frame is not None:
+                    result["played"] = self.playback.play(wav, playback_generation)
+                elif self.device_lock.acquire(blocking=False):
                     try:
                         result["played"] = self.playback.play(wav, playback_generation)
                     finally:
@@ -176,6 +246,8 @@ class ConnectStudio:
                 result["audio_error"] = str(error)
             except (OSError, RuntimeError):
                 result["audio_error"] = "Windows 未能播放，可以在页面上重播回答。"
+            if self.playback.safety_interrupted(playback_generation):
+                result.update(played=False, audio_deferred=True)
             return result
         finally:
             self.describe_lock.release()
@@ -379,6 +451,12 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             if path == "/api/ring/status":
                 self.json_reply(app.ring.status(), send_body=send_body)
                 return
+            if path == "/api/ring/history" or path.startswith("/api/ring/history/"):
+                cursor = path.removeprefix("/api/ring/history").removeprefix("/")
+                if cursor and (not cursor.isascii() or not cursor.isdecimal() or len(cursor) > 20):
+                    raise APIError("预警历史游标无效。", 400)
+                self.json_reply(app.ring.history(int(cursor) if cursor else None), send_body=send_body)
+                return
             if path.startswith("/api/ring/preview/"):
                 self.stream_ring_preview(path.removeprefix("/api/ring/preview/"), send_body)
                 return
@@ -399,17 +477,32 @@ class FrontendHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
-        if path.startswith("/api/"):
+        if path == "/ring-integration/":
+            self.ring_integration_page()
+        elif path.startswith("/api/"):
             self.get_api(path)
         else:
             super().do_GET()
 
     def do_HEAD(self):
         path = urlsplit(self.path).path
-        if path.startswith("/api/"):
+        if path == "/ring-integration/":
+            self.ring_integration_page(send_body=False)
+        elif path.startswith("/api/"):
             self.get_api(path, send_body=False)
         else:
             super().do_HEAD()
+
+    def ring_integration_page(self, send_body=True):
+        if not self.allowed_host():
+            self.send_error(403)
+            return
+        try:
+            page = RING_INTEGRATION_PAGE.read_bytes()
+        except OSError:
+            self.send_error(404)
+            return
+        self.reply(page, "text/html; charset=utf-8", send_body=send_body)
 
     def do_POST(self):
         origin = self.headers.get("Origin")
@@ -434,6 +527,9 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         if path == "/api/ring/test-alarm":
             self.read_json(4096)
             return app.ring.test_alarm()
+        if path == "/api/ring/measure":
+            self.read_json(4096)
+            return app.measure_ring()
         if path == "/api/describe":
             return app.describe(self.read_json(17 * 1024 * 1024))
         if path == "/api/chat":

@@ -151,7 +151,7 @@ class DeepSeek:
             raise APIError("DeepSeek 没有返回完整回答，请重试。")
         return answer
 
-    def transcribe(self, audio):
+    def transcribe(self, audio, *, timeout=18):
         if not audio or len(audio) > MAX_AUDIO_BYTES:
             raise APIError("请使用不超过 8 MiB 的 WAV 或 Ogg Opus 音频。", 400)
         if audio[:4] == b"RIFF" and audio[8:12] == b"WAVE":
@@ -165,17 +165,17 @@ class DeepSeek:
                   f"Content-Type: {media_type}\r\n\r\n").encode("ascii")
         body = header + audio + f"\r\n--{boundary}--\r\n".encode("ascii")
         result = self.json_data(self.request(
-            "/v1/tools/asr", body, f"multipart/form-data; boundary={boundary}", 128 * 1024, timeout=18,
+            "/v1/tools/asr", body, f"multipart/form-data; boundary={boundary}", 128 * 1024, timeout=timeout,
         ))
         text = result.get("text")
         if not isinstance(text, str) or not text.strip():
             raise APIError("这次没有识别到语音，请靠近音箱再说一次。", 422)
         return text.strip()
 
-    def synthesize(self, answer):
+    def synthesize(self, answer, *, timeout=20):
         body = json.dumps({"text": answer, "format": "pcm"}, ensure_ascii=False).encode("utf-8")
         audio = self.request("/v1/tools/tts", body, "application/json", MAX_AUDIO_BYTES,
-                             timeout=20, accept="*/*")
+                             timeout=timeout, accept="*/*")
         if len(audio) < 4800 or len(audio) % 2:
             raise APIError("DeepSeek 返回的语音数据无法播放。")
         output = io.BytesIO()
