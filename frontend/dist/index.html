@@ -51,7 +51,7 @@
     <div class="history-heading"><span class="sidebar-label">最近对话</span><span class="local-label">仅本机</span></div>
     <div class="recent-list" id="recent-list"><p class="history-empty">从一句话开始，<br>让想法被听见。</p></div>
     <div class="sidebar-bottom">
-      <div class="device-card"><div class="device-top"><span class="mini-speaker"><span></span></span><div><strong>Connect 音箱</strong><span id="sidebar-device">设备未连接</span></div></div><button id="device-settings">配置设备连接<svg class="icon"><use href="#i-settings"/></svg></button></div>
+      <div class="sidebar-connection" id="sidebar-connection" role="status"><span class="status-dot" aria-hidden="true"></span><span id="sidebar-device">音箱未连接</span></div>
       <div class="workspace-user"><span class="avatar">我</span><div><strong>我的工作空间</strong><span>本地对话 · v1.0</span></div><button class="icon-button" id="sidebar-settings" aria-label="连接设置"><svg class="icon"><use href="#i-settings"/></svg></button></div>
     </div>
   </aside>
@@ -63,12 +63,16 @@
       <button id="mobile-ring-nav" type="button" aria-controls="ring-monitor">戒指预警</button>
     </nav>
     <main id="workspace-main">
-      <div id="conversation-view">
+      <div id="conversation-view" data-mobile-panel="input">
       <section class="page-heading"><h1>对话工作台</h1><button class="outline-button" id="export-button" aria-label="导出对话"><svg class="icon"><use href="#i-download"/></svg>导出对话</button></section>
       <section class="mode-banner" aria-label="当前工作模式"><div><span class="demo-icon"><svg class="icon"><use href="#i-spark"/></svg></span><div><strong id="mode-title">先体验，再连接</strong><span id="mode-description">当前为演示模式，示例内容不来自音箱或大模型。</span></div></div><button id="demo-button">播放对话演示<svg class="icon"><use href="#i-play"/></svg></button></section>
 
+      <nav class="conversation-mobile-tabs" aria-label="切换对话面板">
+        <button id="mobile-conversation-input" type="button" aria-controls="conversation-input-panel" aria-pressed="true">画面与输入</button>
+        <button id="mobile-conversation-answer" type="button" aria-controls="conversation-answer-panel" aria-pressed="false">AI 的回答</button>
+      </nav>
       <div class="workspace-grid">
-        <section class="input-column" aria-label="音视频输入">
+        <section class="input-column" id="conversation-input-panel" aria-label="画面与输入">
           <div class="panel camera-panel">
             <div class="panel-header"><div class="panel-title"><svg class="icon"><use href="#i-camera"/></svg><h2>设备画面</h2></div><span class="badge neutral" id="camera-state">未开启</span></div>
             <div class="video-stage" id="video-stage">
@@ -88,19 +92,46 @@
             </div>
           </div>
 
-          <div class="panel audio-panel"><div class="panel-header"><div class="panel-title"><svg class="icon"><use href="#i-mic"/></svg><h2>语音输入</h2><span class="small-label">VOICE</span></div><span class="recording-time" id="recording-time">00:00</span></div><div class="waveform" id="waveform" aria-hidden="true"></div><div class="audio-status"><span id="audio-status" role="status" aria-atomic="true">准备好，开始说话</span><span id="audio-source-label">演示输入</span></div><div class="audio-actions"><button class="primary-button record-button" id="record-button"><svg class="icon"><use href="#i-mic"/></svg><span>开始语音输入</span></button><button class="outline-button upload-button" id="upload-button"><svg class="icon"><use href="#i-upload"/></svg>导入音频</button></div><p class="audio-note" id="audio-note">演示模式使用示例文本，不会开启麦克风。</p><audio id="audio-preview" controls hidden></audio></div>
-          <div class="flow-strip"><span><span class="flow-node" id="flow-listen"><svg class="icon"><use href="#i-mic"/></svg></span>听见</span><i></i><span><span class="flow-node" id="flow-read"><svg class="icon"><use href="#i-file"/></svg></span>理解</span><i></i><span><span class="flow-node" id="flow-answer"><svg class="icon"><use href="#i-spark"/></svg></span>回应</span><i></i><span><span class="flow-node" id="flow-speak"><svg class="icon"><use href="#i-volume"/></svg></span>播放</span></div>
+          <section class="panel audio-panel" aria-labelledby="audio-panel-title">
+            <div class="panel-header">
+              <div class="panel-title"><svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg><h2 id="audio-panel-title">语音与文字输入</h2></div>
+              <div class="audio-panel-status"><span class="recording-time" id="recording-time">00:00</span><span class="badge neutral" id="transcript-badge">示例文字</span></div>
+            </div>
+            <div class="waveform" id="waveform" aria-hidden="true"></div>
+            <div class="audio-status"><span id="audio-status" role="status" aria-atomic="true">准备好，开始说话</span><span id="audio-source-label">演示输入</span></div>
+            <div class="audio-actions">
+              <button class="primary-button record-button" id="record-button"><svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg><span>开始语音输入</span></button>
+              <button class="outline-button upload-button" id="upload-button"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg>导入音频</button>
+            </div>
+            <p class="audio-note" id="audio-note">演示模式使用示例文本，不会开启麦克风。</p>
+            <audio id="audio-preview" controls hidden></audio>
+            <div class="transcript-area">
+              <div class="transcript-content">
+                <label class="sr-only" for="transcript">语音识别文本，可手动修改</label>
+                <textarea id="transcript" placeholder="识别出的文字会显示在这里，也可以直接输入问题。" maxlength="12000">你好，介绍一下你能帮我做什么吧。</textarea>
+              </div>
+              <div class="transcript-footer">
+                <div class="transcript-meta"><span id="transcript-status">识别文字可编辑</span><span id="character-count">19 字</span></div>
+                <button class="send-button" id="send-button"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg><span>发送给 AI</span></button>
+              </div>
+            </div>
+          </section>
+          <div class="flow-strip" aria-hidden="true"><span><span class="flow-node" id="flow-listen"><svg class="icon"><use href="#i-mic"/></svg></span>听见</span><i></i><span><span class="flow-node" id="flow-read"><svg class="icon"><use href="#i-file"/></svg></span>理解</span><i></i><span><span class="flow-node" id="flow-answer"><svg class="icon"><use href="#i-spark"/></svg></span>回应</span><i></i><span><span class="flow-node" id="flow-speak"><svg class="icon"><use href="#i-volume"/></svg></span>播放</span></div>
         </section>
 
-        <section class="conversation-column" aria-label="识别文字与模型回答">
-          <div class="panel transcript-panel"><div class="panel-header"><div class="panel-title"><span class="section-icon sand"><svg class="icon"><use href="#i-wave"/></svg></span><h2>你说的话</h2></div><span class="badge neutral" id="transcript-badge">示例文字</span></div><div class="transcript-content"><label class="sr-only" for="transcript">语音识别文本，可手动修改</label><textarea id="transcript" placeholder="识别出的文字会显示在这里，也可以直接输入问题。" maxlength="12000">你好，介绍一下你能帮我做什么吧。</textarea><div class="transcript-meta"><span id="transcript-status"><svg class="icon"><use href="#i-file"/></svg>识别文字可编辑</span><span id="character-count">19 字</span></div></div><div class="transcript-footer"><span>说出来，或写下来。</span><button class="send-button" id="send-button"><svg class="icon"><use href="#i-spark"/></svg><span>发送给 AI</span></button></div></div>
-
-          <div class="panel answer-panel"><div class="panel-header"><div class="panel-title"><span class="section-icon mint"><svg class="icon"><use href="#i-spark"/></svg></span><h2>AI 的回答</h2></div><span class="badge green" id="answer-badge">演示回答</span></div><div class="answer-content" id="answer-content" aria-live="polite" aria-busy="false"><p>我可以回答问题，也可以描述摄像头画面。试试输入问题，或点击「描述当前画面」。</p></div><div class="answer-footer"><span id="answer-model"><span class="model-mark">✳</span>演示助手</span><div><button class="icon-button" id="copy-answer" aria-label="复制回答"><svg class="icon"><use href="#i-copy"/></svg></button><button class="listen-button" id="speak-answer"><svg class="icon"><use href="#i-volume"/></svg><span>朗读回答</span></button></div></div></div>
-          <div class="conversation-tip"><svg class="icon"><use href="#i-check"/></svg><span>对话记录保存在当前浏览器，随时可以导出。</span></div>
-          <figure id="description-photo" class="description-photo" hidden>
-            <img id="description-image" alt="本次描述使用的照片">
-            <figcaption>本次拍摄的照片</figcaption>
-          </figure>
+        <section class="panel answer-panel" id="conversation-answer-panel" aria-labelledby="answer-title">
+          <div class="panel-header">
+            <div class="panel-title"><span class="section-icon mint"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg></span><h2 id="answer-title">AI 的回答</h2></div>
+            <span class="badge green" id="answer-badge">演示回答</span>
+          </div>
+          <div class="answer-scroll" id="answer-scroll" tabindex="0" role="region" aria-label="回答内容">
+            <div class="answer-content" id="answer-content" aria-live="polite" aria-busy="false"><p>我可以回答问题，也可以描述摄像头画面。试试输入问题，或点击「描述当前画面」。</p></div>
+            <figure id="description-photo" class="description-photo" hidden>
+              <img id="description-image" alt="本次描述使用的照片">
+              <figcaption>本次拍摄的照片</figcaption>
+            </figure>
+          </div>
+          <div class="answer-footer"><span id="answer-model"><span class="model-mark">✳</span>演示助手</span><div><button class="icon-button" id="copy-answer" aria-label="复制回答"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg></button><button class="listen-button" id="speak-answer"><svg class="icon" aria-hidden="true"><use href="#i-volume"/></svg><span>朗读回答</span></button></div></div>
           <audio id="reply-audio" preload="none" hidden></audio>
         </section>
       </div>

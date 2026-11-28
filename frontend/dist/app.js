@@ -37,6 +37,15 @@
   }
   function updateCount() { $('character-count').textContent = `${Array.from($('transcript').value).length} 字`; }
   function setFlow(step) { ['listen', 'read', 'answer', 'speak'].forEach((name) => $(`flow-${name}`).classList.toggle('active', step === name)); }
+  function selectMobilePanel(panel, focusAnswer = false) {
+    const view = $('conversation-view');
+    view.dataset.mobilePanel = panel;
+    $('mobile-conversation-input').setAttribute('aria-pressed', String(panel === 'input'));
+    $('mobile-conversation-answer').setAttribute('aria-pressed', String(panel === 'answer'));
+    if (focusAnswer && !view.hidden && $('mobile-conversation-answer').getClientRects().length) {
+      $('answer-scroll').focus({ preventScroll: true });
+    }
+  }
   function setBusy(value) {
     busy = value;
     ['send-button', 'upload-button', 'demo-button', 'describe-button'].forEach((id) => { $(id).disabled = value; });
@@ -73,6 +82,7 @@
     clearDescriptionMedia();
     answer = text; answerKind = kind;
     $('answer-content').className = 'answer-content plain-answer'; $('answer-content').textContent = text;
+    $('answer-scroll').scrollTop = 0;
     $('answer-badge').textContent = kind === 'demo' ? '演示回答' : '模型回答';
     $('answer-badge').className = 'badge green';
     $('answer-model').replaceChildren();
@@ -86,6 +96,7 @@
     answerKind = config.mode === 'demo' ? 'demo' : 'model';
     $('answer-model').textContent = config.mode === 'demo' ? '✳ 演示助手' : (serviceStatus?.model?.connected ? (serviceStatus.model.name || '已连接模型') : '等待模型连接');
     $('answer-content').innerHTML = icon('spark'); const p = document.createElement('p'); p.textContent = message; $('answer-content').append(p);
+    $('answer-scroll').scrollTop = 0;
     $('answer-badge').textContent = '等待提问'; $('answer-badge').className = 'badge neutral';
     $('copy-answer').disabled = true; $('speak-answer').disabled = true;
   }
@@ -129,12 +140,15 @@
   function refreshConnection() {
     const connected = serviceStatus?.device?.connected === true;
     const model = serviceStatus?.model?.connected === true;
-    const deviceText = connected ? '音箱已连接' : serviceStatus?.device?.checked === false ? '等待检测音箱' : '设备未连接';
+    const deviceText = connected ? '音箱已连接' : serviceStatus?.device?.checked === false ? '等待检测音箱' : '音箱未连接';
     const modelText = model ? '模型已连接' : serviceStatus?.model?.configured ? '模型已配置' : '模型未连接';
     $('connection-label').classList.toggle('connected', connected);
     $('connection-label').replaceChildren(); const dot = document.createElement('span'); dot.className = 'status-dot';
+    dot.setAttribute('aria-hidden', 'true');
     $('connection-label').append(dot, document.createTextNode(deviceText));
-    $('sidebar-device').textContent = connected ? (serviceStatus.device.name || deviceText) : deviceText;
+    $('sidebar-connection').classList.toggle('connected', connected);
+    const sidebarStatus = $('sidebar-device');
+    if (sidebarStatus.textContent !== deviceText) sidebarStatus.textContent = deviceText;
     $('footer-status').textContent = `${deviceText} · ${modelText}`;
   }
   function applyMode() {
@@ -228,7 +242,12 @@
       row.append(button, remove); $('history-list').append(row);
     });
   }
-  async function loadHistory(item) { await cancelWork(); currentId = item.id; answerQuestion = item.text; setTranscript(item.text, '历史记录'); showAnswer(item.answer, item.mode); $('audio-status').textContent = '已载入历史对话'; $('history-dialog').close(); }
+  async function loadHistory(item) {
+    await cancelWork(); currentId = item.id; answerQuestion = item.text;
+    setTranscript(item.text, '历史记录'); showAnswer(item.answer, item.mode);
+    $('audio-status').textContent = '已载入历史对话'; $('history-dialog').close();
+    selectMobilePanel('answer', true);
+  }
   function demoResponse(question) {
     if (/介绍|做什么|你好|能力/.test(question)) return initialAnswer;
     if (/画面|看到|摄像|桌面|拍照/.test(question)) return '当前这段是演示回答。\n\n选择“描述当前画面”，可以拍一张照片，发送给 DeepSeek 生成语音描述。';
@@ -318,6 +337,8 @@
       const image = capturePreviewPhoto();
       const body = { text: question };
       if (image) body.image = image;
+      $('answer-scroll').scrollTop = 0;
+      selectMobilePanel('answer', true);
       descriptionInProgress = true;
       const response = await api('/api/describe', {
         method: 'POST',
@@ -347,7 +368,6 @@
       } else {
         await speakAnswer(true);
       }
-      if (config.mode !== 'demo') checkSavedService();
     } catch (error) {
       if (ticket !== generation) return;
       if (descriptionInProgress) stopSpeech();
@@ -361,6 +381,7 @@
         setBusy(false);
         if (!speechActive) setFlow('');
         requestController = null;
+        checkSavedService();
       }
     }
   }
@@ -374,6 +395,8 @@
     setBusy(true); setFlow('answer');
     $('answer-badge').textContent = config.mode === 'demo' ? '演示生成中' : '正在思考'; $('answer-badge').className = 'badge amber';
     $('answer-content').className = 'answer-content plain-answer busy-dots'; $('answer-content').textContent = config.mode === 'demo' ? '正在准备演示回答' : '正在等待模型回答';
+    $('answer-scroll').scrollTop = 0;
+    selectMobilePanel('answer', true);
     $('copy-answer').disabled = true; $('speak-answer').disabled = true;
     try {
       let result, model = '', kind = config.mode === 'demo' ? 'demo' : 'model';
@@ -555,11 +578,10 @@
     } catch { /* Status checks and recording responses still work without optional SSE. */ }
   }
   async function checkSavedService() {
-    serviceStatus = null; refreshConnection();
-    if (config.mode === 'demo') return;
-    const base = config.serviceUrl || localService;
+    const mode = config.mode;
+    const base = mode === 'demo' ? localService : config.serviceUrl || localService;
     if (!base) return;
-    const isCurrent = () => base === (config.serviceUrl || localService) && config.mode !== 'demo';
+    const isCurrent = () => mode === config.mode && (mode === 'demo' || base === (config.serviceUrl || localService));
     try {
       const data = validStatus(await api('/api/status', {}, base));
       if (isCurrent()) { serviceStatus = data; refreshConnection(); connectEvents(); }
@@ -717,22 +739,25 @@
   async function newSession() {
     await cancelWork(); currentId = uid(); setTranscript('', '等待输入'); emptyAnswer(); $('recording-time').textContent = '00:00'; $('audio-status').textContent = '新对话已准备好';
     $('audio-preview').pause(); $('audio-preview').removeAttribute('src'); $('audio-preview').hidden = true;
-    if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl); audioObjectUrl = ''; $('transcript').focus();
+    if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl); audioObjectUrl = '';
+    selectMobilePanel('input'); $('transcript').focus();
   }
 
   // UI binding. All model and recognition text is inserted as text, never as HTML.
   $('transcript').addEventListener('input', () => { updateCount(); $('transcript-badge').textContent = '可发送'; });
   $('send-button').addEventListener('click', sendQuestion);
+  $('mobile-conversation-input').addEventListener('click', () => selectMobilePanel('input'));
+  $('mobile-conversation-answer').addEventListener('click', () => selectMobilePanel('answer'));
   $('describe-button').addEventListener('click', () => {
     setTranscript(describeQuestion, '画面描述指令');
     describeScene();
   });
-  $('demo-button').addEventListener('click', () => { if (!busy && config.mode === 'demo') demoRecording(true); });
+  $('demo-button').addEventListener('click', () => { if (!busy && config.mode === 'demo') { selectMobilePanel('input'); demoRecording(true); } });
   $('record-button').addEventListener('click', () => { if (recording) endRecording(); else if (!busy) { if (config.mode === 'demo') demoRecording(); else if (config.mode === 'browser') browserRecording(); else serviceRecordingStart(); } });
   $('upload-button').addEventListener('click', () => { $('audio-file').value = ''; $('audio-file').click(); });
   $('audio-file').addEventListener('change', () => importAudio($('audio-file').files[0]));
   $('video-file').addEventListener('change', () => { const file = $('video-file').files[0]; if (file) startUrlCamera('', file); $('video-file').value = ''; });
-  ['settings-button', 'sidebar-settings', 'device-settings'].forEach((id) => $(id).addEventListener('click', openSettings));
+  ['settings-button', 'sidebar-settings'].forEach((id) => $(id).addEventListener('click', openSettings));
   document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => $(button.dataset.close).close()));
   $('mode-select').addEventListener('change', modeHelp);
   $('test-connection').addEventListener('click', async () => {
@@ -791,5 +816,6 @@
 
   for (let index = 0; index < 65; index++) { const bar = document.createElement('span'); const height = 5 + Math.abs(Math.sin(index * 1.72) * Math.sin(index * .31)) * 30; bar.style.setProperty('--bar-height', `${height}px`); bar.style.setProperty('--bar-delay', `${-(index % 9) * .09}s`); $('waveform').append(bar); }
   updateCount(); renderHistory(); applyMode();
-  if (config.mode !== 'demo') { setTranscript('', '等待输入'); emptyAnswer(); checkSavedService(); }
+  if (config.mode !== 'demo') { setTranscript('', '等待输入'); emptyAnswer(); }
+  checkSavedService();
 })();
