@@ -24,8 +24,8 @@ EVENT_VERDICTS = {"suspected_fall", "no_visible_fall", "uncertain", "error", "de
                   "already_alerted", "cancelled", "suspected_immobility", "acknowledged"}
 ANALYSIS_STATES = {"queued", "requesting", "received", "failed", "skipped", "unknown"}
 ALARM_STATES = {"pending", "confirming", "playing", "played", "failed", "skipped", "unknown"}
-VOICE_STATES = {"prompting", "listening", "transcribing", "acknowledged", "no_reply", "unconfirmed",
-                "unavailable", "stopped"}
+VOICE_STATES = {"prompting", "listening", "transcribing", "interpreting", "acknowledged", "needs_help",
+                "no_reply", "unconfirmed", "unavailable", "stopped"}
 # Keep a confirmed suspicion visible even if a later batch is skipped or inconclusive.
 VERDICT_PRIORITY = ("already_alerted", "acknowledged", "cancelled", "pending", "no_visible_fall", "demo",
                     "error", "uncertain", "suspected_immobility", "suspected_fall")
@@ -160,7 +160,7 @@ def list_events(session, active, limit=24):
         voice = result.get("voice_state")
         if not isinstance(voice, str) or voice not in VOICE_STATES:
             voice = None
-        elif not active and voice in ("prompting", "listening", "transcribing"):
+        elif not active and voice in ("prompting", "listening", "transcribing", "interpreting"):
             voice = "stopped"
         states = {"verdict": verdict, "summary": summary, "capture_state": capture,
                   "analysis_state": analysis, "alarm_state": alarm, "voice_state": voice,

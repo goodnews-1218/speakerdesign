@@ -63,7 +63,7 @@
     unknown: ['播放状态未记录', ''],
   };
   const alarmSkipLabels = {
-    voice_acknowledged: '已收到「我没事」，本次未响铃',
+    voice_acknowledged: '用户表示自己没事，本次未响铃',
     stopped: '监测已停止，未播放',
     no_fall: '分析结果未达到响铃条件',
     uncertain: '画面无法确认，未播放',
@@ -76,7 +76,9 @@
     prompting: ['正在准备或播放询问', 'warning'],
     listening: ['正在听取回应（8 秒）', 'warning'],
     transcribing: ['正在识别回应', 'warning'],
-    acknowledged: ['收到「我没事」', 'success'],
+    interpreting: ['DeepSeek 正在判断回应含义', 'warning'],
+    acknowledged: ['用户表示自己没事', 'success'],
+    needs_help: ['用户报告异常或求助', 'warning'],
     no_reply: ['窗口内未收到回应', 'warning'],
     unconfirmed: ['未听到明确的平安确认', 'warning'],
     unavailable: ['语音确认不可用，需人工查看', 'error'],

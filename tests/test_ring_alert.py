@@ -191,6 +191,14 @@ class RingAlertTests(unittest.TestCase):
         self.assertEqual(result["voice_state"], "unavailable")
         self.assertFalse(result.get("urgent", False))
 
+    def test_explicit_help_plays_alarm_and_records_the_reason(self):
+        event = self.make_event(1)
+        self.consume(reply="needs_help").assert_called_once()
+        result = self.result(event)
+        self.assertTrue(result["alarm_played"])
+        self.assertEqual(result["voice_state"], "needs_help")
+        self.assertEqual(result["alarm_reason"], "voice_needs_help")
+
     def test_stillness_needs_sustained_post_alert_evidence(self):
         response = {"verdict": "suspected_immobility", "summary": "同一人坐在座位上，未见明显动作。",
                     "evidence": [{"frame": n, "posture": "seated", "observation": "仍坐在原处。"}
@@ -210,17 +218,29 @@ class RingAlertTests(unittest.TestCase):
         self.client.complete.return_value = json.dumps(response)
         self.assertEqual(assess_fall(self.client, list(zip((300, 3300, 6300), PHOTOS))).verdict, "uncertain")
 
-    def test_voice_reads_only_post_prompt_audio_and_requires_explicit_confirmation(self):
+    def test_voice_sends_only_post_prompt_audio_and_uses_semantic_classification(self):
         mic_path = self.root / "mic.wav"
         sound = io.BytesIO()
         with wave.open(sound, "wb") as wav:
             wav.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
             wav.writeframes(b"\x00\x00" * 100)
         self.client.synthesize.return_value = sound.getvalue()
-        for transcript, expected in (("我没事。", "acknowledged"), ("我摔倒了，救命！", "unconfirmed")):
+        cases = (
+            ("我沒有受傷，不用幫忙。", '{"intent":"safe"}', "acknowledged"),
+            ("我摔倒了，救命！", '{"intent":"needs_help"}', "needs_help"),
+            ("我没事，但是我站不起来。", '{"intent":"needs_help"}', "needs_help"),
+            ("喂，听见了。", '{"intent":"unclear"}', "unconfirmed"),
+            ("喂。", '{"intent":"safe","other":true}', "unconfirmed"),
+            ("喂。", APIError("语义判断超时。"), "unavailable"),
+            ("   ", None, "no_reply"),
+        )
+        for transcript, response, expected in cases:
             with self.subTest(transcript=transcript):
                 mic_path.write_bytes(sound.getvalue())
                 self.client.transcribe.return_value = transcript
+                self.client.complete.reset_mock()
+                self.client.complete.side_effect = response if isinstance(response, APIError) else None
+                self.client.complete.return_value = response
                 cancel = Mock()
                 cancel.is_set.return_value = False
                 new_pcm = b"\x00\x04" * 1000
@@ -232,11 +252,21 @@ class RingAlertTests(unittest.TestCase):
                     return False
 
                 cancel.wait.side_effect = feed
+                progress = Mock()
                 with patch.object(ring_alert, "winsound", self.sound):
-                    reply = ring_alert.listen_for_reply(self.client, mic_path, cancel, None, Mock())
+                    reply = ring_alert.listen_for_reply(self.client, mic_path, cancel, None, progress)
                 self.assertEqual(reply, expected)
                 with wave.open(io.BytesIO(self.client.transcribe.call_args.args[0]), "rb") as sent:
                     self.assertEqual(sent.readframes(sent.getnframes()), new_pcm * 128)
+                if response is None:
+                    self.client.complete.assert_not_called()
+                    continue
+                progress.assert_called_with("interpreting")
+                self.client.complete.assert_called_once()
+                messages = self.client.complete.call_args.args[0]
+                self.assertEqual([message["role"] for message in messages], ["system", "user"])
+                self.assertEqual(json.loads(messages[1]["content"]), {"transcript": transcript})
+                self.assertTrue(self.client.complete.call_args.kwargs["json_output"])
 
     def test_bad_marker_and_upstream_error_do_not_play_alarm(self):
         invalid = self.make_event(1, times=(-500, -500, 500))
