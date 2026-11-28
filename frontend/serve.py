@@ -160,6 +160,9 @@ class ConnectStudio:
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
                 if process.returncode or not photo.is_file():
+                    if process.returncode == 3 and process.stderr.startswith(b"SNAPSHOT_DARK_FRAME:"):
+                        self.device_connected = True
+                        raise APIError("音箱画面太暗，未发送给 DeepSeek。请打开镜头盖、增加光线后重试。", 503)
                     self.device_connected = False
                     if process.stderr:
                         print(process.stderr.decode("utf-8", errors="replace").strip()[:1200], flush=True)

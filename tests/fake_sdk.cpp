@@ -40,7 +40,11 @@ extern "C" ViaimConnectResult __cdecl viaim_connect_open(ViaimConnectSdk* s,cons
         while(s->running) {
             next+=50ms;
             std::this_thread::sleep_until(next);
+#ifdef CONNECT_FRAME_SIMULATED
+            if(!s->camera)continue;
+#else
             if(!s->recording || scenario()=="no_audio")continue;
+#endif
             if(scenario()=="disconnect" && sequence==4) {
                 if(s->callbacks.connection_state)s->callbacks.connection_state(3,s->callbacks.user_data);
                 s->recording=false;continue;
@@ -48,11 +52,19 @@ extern "C" ViaimConnectResult __cdecl viaim_connect_open(ViaimConnectSdk* s,cons
             std::vector<uint8_t> bytes(1600,0x12);
 #ifdef CONNECT_LAB_VIDEO
             if(s->camera) {
+#ifdef CONNECT_FRAME_SIMULATED
+                const auto mode = scenario();
+                const bool dark = mode == "dark_camera" || (mode == "camera_warmup" && sequence < 28);
+                std::vector<uint8_t> pixels(size_t(width)*height*3, dark ? 21 : 48);
+                // Sparse light in an otherwise dark frame should not pass the exposure check.
+                pixels[1] = 160;
+#else
                 std::vector<uint8_t> pixels(size_t(width)*height*3, 48);
                 for(uint32_t y=0;y<height;++y) {
                     const auto x=(sequence*3)%width;
                     pixels[(size_t(y)*width+x)*3+1]=160;
                 }
+#endif
                 ViaimConnectCameraFrame frame{};
                 frame.struct_size=sizeof(frame);
                 frame.pixel_format=VIAIM_CONNECT_CAMERA_PIXEL_FORMAT_BGR24;

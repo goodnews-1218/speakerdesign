@@ -85,6 +85,11 @@ if(WIN32)
   target_link_libraries(${lab_target} PRIVATE ring_pulse winhttp windowsapp windowscodecs ole32)
 endif()
 if(WIN32 AND CONNECT_LAB_SIMULATOR)
+  add_executable(connect_frame_simulated src/ConnectFrame.cpp src/CameraCaptureSupport.cpp tests/fake_sdk.cpp)
+  target_include_directories(connect_frame_simulated PRIVATE vendor/include src)
+  target_compile_definitions(connect_frame_simulated PRIVATE CONNECT_LAB_VIDEO=1 CONNECT_FRAME_SIMULATED=1
+    VIAIM_CONNECT_SDK_BUILD=1)
+  target_link_libraries(connect_frame_simulated PRIVATE windowscodecs ole32)
   add_executable(ring_alert_frames_tests tests/ring_alert_frames_tests.cpp
     src/RingAlertFrames.cpp src/CameraCaptureSupport.cpp tests/fake_sdk.cpp)
   target_include_directories(ring_alert_frames_tests PRIVATE vendor/include src)

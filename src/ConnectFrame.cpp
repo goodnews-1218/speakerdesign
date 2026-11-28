@@ -5,6 +5,7 @@
 #endif
 #include <windows.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cwchar>
@@ -16,6 +17,11 @@
 
 namespace {
 using Clock = std::chrono::steady_clock;
+constexpr auto cameraWarmup = std::chrono::seconds(1);
+
+struct DarkFrameError : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
 
 struct Options {
     std::filesystem::path output;
@@ -86,9 +92,28 @@ struct Capture {
     bool cameraFailed = false;
     bool copyFailed = false;
     bool accepting = false;
+    bool sawDarkFrame = false;
+    Clock::time_point readyAfter;
     ViaimConnectCameraOpenOptions mode = VIAIM_CONNECT_CAMERA_OPEN_OPTIONS_INIT;
     std::vector<uint8_t> pixels;
 };
+
+bool hasVisibleDetail(const std::vector<uint8_t>& pixels, uint32_t width, uint32_t height) {
+    constexpr size_t step = 8;
+    constexpr uint8_t visibleLevel = 36;
+    const auto sampleCount = ((width + step - 1) / step) * ((height + step - 1) / step);
+    size_t visibleSamples = 0;
+    for (size_t y = 0; y < height; y += step) {
+        for (size_t x = 0; x < width; x += step) {
+            const auto offset = (y * width + x) * 3;
+            const bool visible = pixels[offset] >= visibleLevel || pixels[offset + 1] >= visibleLevel ||
+                                 pixels[offset + 2] >= visibleLevel;
+            // Ignore isolated bright pixels in an otherwise underexposed frame.
+            if (visible && ++visibleSamples * 100 > sampleCount) return true;
+        }
+    }
+    return false;
+}
 
 void __cdecl onConnection(ViaimConnectConnectionState state, void* data) {
     auto& capture = *static_cast<Capture*>(data);
@@ -113,9 +138,15 @@ void __cdecl onFrame(const ViaimConnectCameraFrame* frame, void* data) {
     if (frame == nullptr) return;
     auto& capture = *static_cast<Capture*>(data);
     std::lock_guard lock(capture.mutex);
-    if (!capture.accepting || !capture.pixels.empty() || capture.copyFailed) return;
+    if (!capture.accepting || !capture.pixels.empty() || capture.copyFailed || Clock::now() < capture.readyAfter) return;
     try {
-        capture.pixels = copyBgrCameraFrame(*frame, capture.mode);
+        auto pixels = copyBgrCameraFrame(*frame, capture.mode);
+        if (pixels.empty()) return;
+        if (!hasVisibleDetail(pixels, capture.mode.width, capture.mode.height)) {
+            capture.sawDarkFrame = true;
+            return;
+        }
+        capture.pixels.swap(pixels);
     } catch (const std::exception&) {
         capture.copyFailed = true;
     }
@@ -165,13 +196,16 @@ void captureFrame(Capture& capture, const Options& options) {
     {
         std::unique_lock lock(capture.mutex);
         capture.mode = mode;
-        // Wait for a new frame after the SDK has opened the camera successfully.
+        // Give auto-exposure time to settle before sampling the camera stream.
+        const auto openedAt = Clock::now();
+        capture.readyAfter = std::min(openedAt + cameraWarmup, openedAt + (deadline - openedAt) / 2);
         capture.accepting = true;
         const bool received = capture.ready.wait_until(lock, deadline, [&] {
             return !capture.pixels.empty() || capture.connectionLost || capture.cameraFailed || capture.copyFailed;
         });
         capture.accepting = false;
         if (!received) {
+            if (capture.sawDarkFrame) throw DarkFrameError("The Connect camera frames are too dark");
             throw std::runtime_error("Timed out waiting for a valid camera frame");
         }
         if (capture.connectionLost || capture.cameraFailed) {
@@ -211,6 +245,9 @@ int wmain(int argc, wchar_t** argv) {
         }
         std::cout << "SNAPSHOT_SAVED=" << capture.mode.width << 'x' << capture.mode.height << '\n';
         return 0;
+    } catch (const DarkFrameError& error) {
+        std::cerr << "SNAPSHOT_DARK_FRAME: " << error.what() << '\n';
+        return 3;
     } catch (const std::exception& error) {
         std::cerr << "SNAPSHOT_ERROR: " << error.what() << '\n';
         return 1;

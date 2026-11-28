@@ -26,7 +26,7 @@
   let speechActive = false, speechVersion = 0, answerAudioUrl = '', cameraVersion = 0;
   let serverPlayback = false, serverPlaybackTimer;
   let descriptionInProgress = false, pendingPlaybackStop = null;
-  let ringGestureArmed = false;
+  let ringGestureArmed = Boolean(localService) && ['127.0.0.1', 'localhost'].includes(window.location.hostname);
   let cameraStream = null, cameraKind = '', videoObjectUrl = '', audioObjectUrl = '', cameraTimeout = null, cameraPending = false;
   let toastTimer;
 
@@ -51,7 +51,7 @@
   }
   function setBusy(value) {
     busy = value;
-    ['send-button', 'upload-button', 'demo-button', 'describe-button'].forEach((id) => { $(id).disabled = value; });
+    ['send-button', 'upload-button', 'describe-button'].forEach((id) => { $(id).disabled = value; });
     $('record-button').disabled = value && !recording;
     $('answer-content').setAttribute('aria-busy', String(value && !recording));
     $('transcript').readOnly = value;
@@ -156,14 +156,15 @@
     $('footer-status').textContent = `${deviceText} · ${modelText}`;
   }
   function applyMode() {
-    const copy = {
-      demo: ['先体验，再连接', '普通对话使用示例。可单独使用“描述当前画面”。', '演示输入', '演示模式使用示例文本，不会开启麦克风。'],
-      browser: ['用声音，开启对话', '使用电脑默认麦克风识别。', '电脑麦克风', '可以说“描述一下你看到的画面”。浏览器识别可能使用在线服务。'],
-      service: ['让音箱，接入对话', '从音箱接收识别文字，向模型发送问题。', '音箱采集服务', '开始录音后，说“描述一下你看到的画面”，然后结束录音。']
+    const [audioSource, audioNote] = {
+      demo: ['演示输入', '演示模式使用示例文本，不会开启麦克风。'],
+      browser: ['电脑麦克风', '可以说“描述一下你看到的画面”。浏览器识别可能使用在线服务。'],
+      service: ['音箱采集服务', '开始录音后，说“描述一下你看到的画面”，然后结束录音。']
     }[config.mode];
-    ['mode-title', 'mode-description', 'audio-source-label', 'audio-note'].forEach((id, index) => { $(id).textContent = copy[index]; });
+    $('audio-source-label').textContent = audioSource;
+    $('audio-note').textContent = audioNote;
     $('describe-help').textContent = '发送当前预览的一帧给 DeepSeek。未开启预览时，使用音箱摄像头拍照。';
-    $('demo-button').hidden = config.mode !== 'demo'; $('audio-status').textContent = '准备好，开始说话'; refreshConnection();
+    $('audio-status').textContent = '准备好，开始说话'; refreshConnection();
   }
   function stopSpeech() {
     ++speechVersion;
@@ -289,6 +290,19 @@
     canvas.height = Math.round(height * scale);
     try {
       canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
+      const sample = document.createElement('canvas');
+      sample.width = 48;
+      sample.height = 27;
+      const context = sample.getContext('2d');
+      context.drawImage(canvas, 0, 0, sample.width, sample.height);
+      const pixels = context.getImageData(0, 0, sample.width, sample.height).data;
+      let visiblePixels = 0;
+      for (let i = 0; i < pixels.length; i += 4) {
+        if (Math.max(pixels[i], pixels[i + 1], pixels[i + 2]) >= 36) visiblePixels++;
+      }
+      if (visiblePixels <= sample.width * sample.height / 100) {
+        throw new Error('预览画面太暗，未发送给 DeepSeek。请检查镜头盖和光线后再试。');
+      }
       return canvas.toDataURL('image/jpeg', 0.88);
     } catch (error) {
       if (error.name === 'SecurityError') {
@@ -313,7 +327,7 @@
     image.onerror = () => { photo.hidden = true; };
     image.src = source;
   }
-  async function describeScene(question = describeQuestion, fromVoice = false, { forceConnect = false } = {}) {
+  async function describeScene(question = describeQuestion, fromVoice = false) {
     if (busy) return;
     if (!localService) {
       const message = '请从本地启动器打开页面，再使用画面描述。';
@@ -338,7 +352,7 @@
     try {
       if (stopping) await stopping;
       if (ticket !== generation) return;
-      const image = forceConnect ? '' : capturePreviewPhoto();
+      const image = capturePreviewPhoto();
       const body = { text: question };
       if (image) body.image = image;
       $('answer-scroll').scrollTop = 0;
@@ -427,12 +441,11 @@
       if (ticket !== generation) return; emptyAnswer(error.message); $('answer-badge').textContent = '未能获取回答'; $('answer-badge').className = 'badge amber'; toast(error.message);
     } finally { if (ticket === generation) { setBusy(false); setFlow(''); requestController = null; } }
   }
-  async function demoRecording(autoSend = false) {
+  async function demoRecording() {
     const ticket = ++generation; stopSpeech(); setRecording(true); setBusy(true);
     setTranscript('', '演示识别中'); $('audio-status').textContent = '正在展示示例识别过程';
     for (let index = 0; index < exampleQuestion.length; index++) { if (ticket !== generation || !recording) return; setTranscript(exampleQuestion.slice(0, index + 1), '演示识别中'); await sleep(85); }
     if (ticket !== generation) return; setRecording(false); setBusy(false); setFlow('read'); $('audio-status').textContent = '示例文字已就绪'; $('transcript-badge').textContent = '示例文字';
-    if (autoSend) await sendQuestion();
   }
   async function browserRecording() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -626,7 +639,8 @@
       if (selectedId && Array.from(select.options).some((option) => option.value === `device:${selectedId}`)) select.value = `device:${selectedId}`;
     } catch {}
   }
-  async function startCamera() {
+  async function startCamera(event) {
+    if (ringGestureArmed && event.detail > 0) $('workspace-main').focus({ preventScroll: true });
     if (cameraKind || cameraPending) { stopCamera(); return; }
     const selection = $('camera-source').value;
     if (selection === 'file') { $('video-file').click(); return; }
@@ -762,13 +776,13 @@
     describeScene();
   });
   ringGestureToggle.disabled = !localService;
+  ringGestureToggle.setAttribute('aria-pressed', String(ringGestureArmed));
   ringGestureToggle.addEventListener('click', () => {
     ringGestureArmed = !ringGestureArmed;
     ringGestureToggle.setAttribute('aria-pressed', String(ringGestureArmed));
     if (ringGestureArmed) $('workspace-main').focus({ preventScroll: true });
     toast(ringGestureArmed ? '戒指双击已启用，请保持声境页面在前台。' : '戒指双击已停用。');
   });
-  $('demo-button').addEventListener('click', () => { if (!busy && config.mode === 'demo') { selectMobilePanel('input'); demoRecording(true); } });
   $('record-button').addEventListener('click', () => { if (recording) endRecording(); else if (!busy) { if (config.mode === 'demo') demoRecording(); else if (config.mode === 'browser') browserRecording(); else serviceRecordingStart(); } });
   $('upload-button').addEventListener('click', () => { $('audio-file').value = ''; $('audio-file').click(); });
   $('audio-file').addEventListener('change', () => importAudio($('audio-file').files[0]));
@@ -830,7 +844,7 @@
         $('workspace-main').focus({ preventScroll: true });
       }
       setTranscript(describeQuestion, '戒指双击指令');
-      describeScene(describeQuestion, false, { forceConnect: true });
+      describeScene(describeQuestion);
       return;
     }
     if ($('conversation-view').hidden) return;

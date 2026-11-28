@@ -35,6 +35,16 @@ class RingIntegrationTests(unittest.TestCase):
         self.assertEqual(result["image_source"], "connect")
         self.assertTrue(result["played"])
 
+    @patch("serve.subprocess.run")
+    def test_dark_native_frame_reports_camera_connected_and_skips_deepseek(self, run):
+        self.app.frame_exe.touch()
+        run.return_value = SimpleNamespace(returncode=3, stderr=b"SNAPSHOT_DARK_FRAME: No usable light")
+        with self.assertRaisesRegex(APIError, "画面太暗"):
+            self.app.describe({})
+        self.assertTrue(self.app.device_connected)
+        self.app.deepseek.chat.assert_not_called()
+        self.app.deepseek.synthesize.assert_not_called()
+
     def test_alert_reserves_audio_and_interrupts_pending_description(self):
         playback = self.app.playback
         generation = playback.stop()

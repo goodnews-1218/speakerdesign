@@ -12,11 +12,10 @@ button{font:inherit;background:#135b72;color:white;border:0;border-radius:8px;pa
 </style>
 <p><a href="/">返回 Connect Studio</a></p>
 <h1>戒指音箱联动测试</h1>
-<p>点一次「开始测试」，确认听到短提示音。测试时保持这个页面在前台。</p>
-<button id="start">开始测试</button>
-<p>双击戒指触摸区，拍摄并播报音箱看到的画面。4 秒内做两次向下动作，播报「我摔倒了」。</p>
+<p>保持页面在前台，直接双击戒指触摸区，拍摄并播报音箱看到的画面。测试向下求救手势前，先点「测试提示音」，再在 4 秒内做两次向下动作。</p>
+<button id="test-audio" type="button">测试提示音</button>
 <p><button id="describe">描述当前画面</button></p>
-<p id="status" role="status" aria-live="polite">等待开始</p>
+<p id="status" role="status" aria-live="polite">等待戒指输入</p>
 <section id="scene" aria-labelledby="scene-heading" hidden>
 <h2 id="scene-heading">画面描述</h2>
 <p id="scene-description"></p>
@@ -35,7 +34,7 @@ button{font:inherit;background:#135b72;color:white;border:0;border-radius:8px;pa
 </section>
 <script>
 const status = document.getElementById('status');
-const start = document.getElementById('start');
+const testAudio = document.getElementById('test-audio');
 const motions = [];
 let audio;
 let nextAlarm = 0;
@@ -48,15 +47,16 @@ function beep(offset, duration) {
   tone.start(audio.currentTime + offset);
   tone.stop(audio.currentTime + offset + duration);
 }
-start.addEventListener('click', async () => {
+testAudio.addEventListener('click', async () => {
   try {
     audio ??= new AudioContext();
     await audio.resume();
     beep(0, 0.13);
-    status.textContent = '已开始，等待戒指输入';
-    start.blur();
+    status.textContent = '已播放提示音，等待戒指输入。';
   } catch {
-    status.textContent = '无法启用音频，请重新点开始测试。';
+    status.textContent = '浏览器未能播放测试提示音。';
+  } finally {
+    testAudio.blur();
   }
 });
 const describeButton = document.getElementById('describe');
@@ -177,17 +177,16 @@ describeButton.addEventListener('click', () => {
   void reportScene();
 });
 window.addEventListener('keydown', event => {
-  if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey ||
+  if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
       event.target.closest?.('input, textarea, select, button, a, [contenteditable]')) return;
-  if (audio?.state !== 'running' || !['PageUp', 'PageDown', 'Enter'].includes(event.key)) return;
+  if (event.key !== 'Enter' && (audio?.state !== 'running' || !['PageUp', 'PageDown'].includes(event.key))) return;
   event.preventDefault();
-  if (event.repeat) return;
+  if (event.repeat || event.key === 'PageUp') return;
   if (event.key === 'Enter') {
     motions.length = 0;
     void reportScene();
     return;
   }
-  if (event.key === 'PageUp') return;
   const now = performance.now();
   if (now < nextAlarm) return;
   while (motions.length && now - motions[0] > 4000) motions.shift();

@@ -65,15 +65,6 @@
     <main id="workspace-main" tabindex="-1">
       <div id="conversation-view" data-mobile-panel="input">
       <section class="page-heading"><h1>对话工作台</h1><button class="outline-button" id="export-button" aria-label="导出对话"><svg class="icon"><use href="#i-download"/></svg>导出对话</button></section>
-      <section class="mode-banner" aria-label="当前工作模式">
-        <div><span class="demo-icon"><svg class="icon"><use href="#i-spark"/></svg></span><div><strong id="mode-title">先体验，再连接</strong><span id="mode-description">当前为演示模式，示例内容不来自音箱或大模型。</span></div></div>
-        <div class="mode-actions">
-          <button id="demo-button">播放对话演示<svg class="icon"><use href="#i-play"/></svg></button>
-          <button id="ring-gesture-toggle" type="button" aria-pressed="false" aria-describedby="ring-gesture-help">戒指双击描述<svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></button>
-          <p id="ring-gesture-help" class="sr-only">通过蓝牙连接戒指。开启后，让声境页面保持在前台并双击戒指。普通键盘的回车键也能触发。</p>
-        </div>
-      </section>
-
       <nav class="conversation-mobile-tabs" aria-label="切换对话面板">
         <button id="mobile-conversation-input" type="button" aria-controls="conversation-input-panel" aria-pressed="true">画面与输入</button>
         <button id="mobile-conversation-answer" type="button" aria-controls="conversation-answer-panel" aria-pressed="false">AI 的回答</button>
@@ -102,7 +93,12 @@
           <section class="panel audio-panel" aria-labelledby="audio-panel-title">
             <div class="panel-header">
               <div class="panel-title"><svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg><h2 id="audio-panel-title">语音与文字输入</h2></div>
-              <div class="audio-panel-status"><span class="recording-time" id="recording-time">00:00</span><span class="badge neutral" id="transcript-badge">示例文字</span></div>
+              <div class="audio-panel-status">
+                <span class="recording-time" id="recording-time">00:00</span>
+                <span class="badge neutral" id="transcript-badge">示例文字</span>
+                <button id="ring-gesture-toggle" type="button" aria-pressed="false" aria-describedby="ring-gesture-help">戒指双击描述<svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></button>
+                <p id="ring-gesture-help" class="sr-only">本地工作台默认接收戒指双击。通过蓝牙连接戒指并让声境页面保持在前台。普通键盘的回车键也能触发。</p>
+              </div>
             </div>
             <div class="waveform" id="waveform" aria-hidden="true"></div>
             <div class="audio-status"><span id="audio-status" role="status" aria-atomic="true">准备好，开始说话</span><span id="audio-source-label">演示输入</span></div>
