@@ -15,8 +15,7 @@ MAX_CHANGE_MS = 3000
 
 Verdict = Literal["suspected_fall", "suspected_immobility", "no_visible_fall", "uncertain"]
 VERDICTS = {"suspected_fall", "suspected_immobility", "no_visible_fall", "uncertain"}
-POSTURES = {"upright_or_seated", "losing_posture", "slumped", "on_floor", "other", "unclear"}
-STILLNESS_POSTURES = {"upright_or_seated", "slumped", "on_floor"}
+POSTURES = {"upright_or_seated", "seated", "losing_posture", "slumped", "on_floor", "other", "unclear"}
 MIN_STILLNESS_MS = 6000
 
 SYSTEM_PROMPT = """
@@ -27,14 +26,14 @@ SYSTEM_PROMPT = """
 按规则选择一个 verdict：
 - suspected_fall：至少两张相隔不超过 3 秒的清晰帧显示同一人从站姿或坐姿突然失去支撑、
   跌向地面、倒地或在座位上突然瘫软。标记明显瘫软姿势为 slumped，并给出多帧证据。
-- suspected_immobility：心率预警确认后（相对时间为正或零），同一人在同一位置和姿势中至少有 3 张清晰帧，
-  跨度至少 6 秒、相邻证据不超过 3 秒，期间未看到明显动作。可以是坐在座位上。应引用足够的首尾和中间帧。
+- suspected_immobility：心率预警确认后（相对时间为正或零），同一人保持同一坐姿至少有 3 张清晰帧，
+  跨度至少 6 秒、相邻证据不超过 3 秒，期间未看到明显动作。证据姿势都标记为 seated。
   有明显主动动作、遮挡、人员出画、视角变化或画面无法确认时不要选此项。静止只是触发语音确认的线索。
 - no_visible_fall：至少两张画面足以观察人员，未看到摔倒迹象。只说明本次取样所见。
 - uncertain：画面缺失、人员不可见、无法确认是否为同一人、采样间隔过长，或无法区分主动动作和摔倒。
 
 返回一个 json 对象，字段只有 verdict、evidence 和 summary。evidence 按帧号升序，最多四条，
-只引用实际给出的帧号。posture 从 upright_or_seated、losing_posture、slumped、on_floor、other、unclear 中选择。
+只引用实际给出的帧号。posture 从 upright_or_seated、seated、losing_posture、slumped、on_floor、other、unclear 中选择。
 多人时，证据必须对应同一人。observation 和 summary 用简短中文描述可见事实。模糊或看不到人员时，证据可以为空。
 json 示例：{"verdict":"suspected_fall","evidence":[
 {"frame":2,"posture":"upright_or_seated","observation":"画面中央人员站立。"},
@@ -93,7 +92,7 @@ def assessment_text(value, max_length: int) -> str:
     return text
 
 
-def read_assessment(value: dict, times_ms: Sequence[int]) -> FallAssessment:
+def read_assessment(value: dict, times_ms: Sequence[int], onset_ms=None) -> FallAssessment:
     if set(value) != {"verdict", "evidence", "summary"}:
         raise APIError("DeepSeek 返回的画面判断字段不完整。")
     verdict, evidence = value["verdict"], value["evidence"]
@@ -115,12 +114,12 @@ def read_assessment(value: dict, times_ms: Sequence[int]) -> FallAssessment:
 
     summary = assessment_text(value["summary"], 200)
     if verdict == "suspected_fall":
-        transitions = {("upright_or_seated", "losing_posture"), ("upright_or_seated", "on_floor"),
-                       ("losing_posture", "on_floor"), ("upright_or_seated", "slumped"),
-                       ("losing_posture", "slumped")}
+        transitions = {(before, after) for before in ("upright_or_seated", "seated", "losing_posture")
+                       for after in ("losing_posture", "slumped", "on_floor") if before != after}
         transition_seen = any(
             (earlier.posture, later.posture) in transitions
             and change_interval(times_ms[earlier.frame - 1], times_ms[later.frame - 1])
+            and (onset_ms is None or times_ms[later.frame - 1] >= onset_ms)
             for index, earlier in enumerate(observations)
             for later in observations[index + 1:]
         )
@@ -131,7 +130,7 @@ def read_assessment(value: dict, times_ms: Sequence[int]) -> FallAssessment:
         poses = {item.posture for item in observations}
         if (len(stamps) < 3 or stamps[0] < 0 or stamps[-1] - stamps[0] < MIN_STILLNESS_MS
                 or any(not change_interval(a, b) for a, b in zip(stamps, stamps[1:]))
-                or len(poses) != 1 or not poses <= STILLNESS_POSTURES):
+                or poses != {"seated"}):
             verdict, summary = "uncertain", "预警后的取样不足以支持持续无明显动作。"
     elif verdict == "no_visible_fall" and sum(item.posture != "unclear" for item in observations) < 2:
         verdict, summary = "uncertain", "可判断人员状态的画面不足。"
@@ -139,6 +138,7 @@ def read_assessment(value: dict, times_ms: Sequence[int]) -> FallAssessment:
 
 
 def assess_fall(client: DeepSeek, frames: Sequence[tuple[int, bytes]], *,
+                onset_ms: int | None = None,
                 on_request: Callable[[], None] | None = None,
                 on_response: Callable[[], None] | None = None) -> FallAssessment:
     samples = usable_frames(frames)
@@ -147,6 +147,8 @@ def assess_fall(client: DeepSeek, frames: Sequence[tuple[int, bytes]], *,
         return FallAssessment("uncertain", (), "画面数量或时间间隔不足以判断姿势变化。")
 
     content = []
+    if onset_ms is not None:
+        content.append({"type": "text", "text": f"心率异常起点为 {onset_ms:+d} 毫秒。只把异常起点或之后出现的倒地或瘫软作为疑似预警。"})
     for index, (time_ms, jpeg) in enumerate(samples, 1):
         content.append({"type": "text", "text": f"第 {index} 帧，相对预警确认时刻 {time_ms:+d} 毫秒。"})
         content.append(jpeg_content(jpeg))
@@ -159,7 +161,7 @@ def assess_fall(client: DeepSeek, frames: Sequence[tuple[int, bytes]], *,
     if on_response:
         on_response()
     sample_times = [time_ms for time_ms, _ in samples]
-    assessment = read_assessment(client.json_data(response), sample_times)
+    assessment = read_assessment(client.json_data(response), sample_times, onset_ms)
     source_frames = {time_ms: index for index, (time_ms, _) in enumerate(frames, 1)}
     # Keep evidence aligned with the saved JPEG filenames after excluding duplicates.
     evidence = tuple(

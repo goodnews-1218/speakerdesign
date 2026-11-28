@@ -207,7 +207,9 @@ def analyze_event(marker, client, notified, cancel, *, analyze_demo=False, stop_
         if cancel.is_set():
             return skipped("cancelled", "分析已停止。", "stopped")
         frames = load_frames(marker.parent, event.get("times_ms"))
-        assessment = assess_fall(client, frames, on_request=request_started, on_response=response_received)
+        onset = event.get("onset_ms")
+        assessment = assess_fall(client, frames, onset_ms=onset if type(onset) is int and -120000 <= onset <= 0 else None,
+                                 on_request=request_started, on_response=response_received)
     except InterruptedError:
         return skipped("cancelled", "分析已停止。", "stopped")
     except (APIError, OSError, ValueError, TypeError) as error:
@@ -235,9 +237,9 @@ def analyze_event(marker, client, notified, cancel, *, analyze_demo=False, stop_
         if acknowledged is not None:
             acknowledged.add(episode)
         return {**result, "alarm_state": "skipped", "alarm_reason": "voice_acknowledged"}
-    if assessment.verdict == "suspected_fall" and voice == "no_reply":
+    if voice == "no_reply":
         result["urgent"] = True
-        print(f"RING_ALERT_URGENT episode={episode} 心率预警、画面疑似跌倒或瘫软、未收到回应。请立即查看现场。",
+        print(f"RING_ALERT_URGENT episode={episode} verdict={assessment.verdict} 心率预警后未收到语音回应。请立即查看现场。",
               flush=True)
     print(f"RING_ALERT_NEEDS_REVIEW episode={episode} verdict={assessment.verdict} voice={voice}", flush=True)
     result["alarm_state"] = "playing"

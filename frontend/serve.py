@@ -379,6 +379,12 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             if path == "/api/ring/status":
                 self.json_reply(app.ring.status(), send_body=send_body)
                 return
+            if path == "/api/ring/history" or path.startswith("/api/ring/history/"):
+                cursor = path.removeprefix("/api/ring/history").removeprefix("/")
+                if cursor and (not cursor.isascii() or not cursor.isdecimal() or len(cursor) > 20):
+                    raise APIError("预警历史游标无效。", 400)
+                self.json_reply(app.ring.history(int(cursor) if cursor else None), send_body=send_body)
+                return
             if path.startswith("/api/ring/preview/"):
                 self.stream_ring_preview(path.removeprefix("/api/ring/preview/"), send_body)
                 return

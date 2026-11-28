@@ -157,6 +157,8 @@ void activeEpisode(const fs::path& root) {
     checkBatch(first, 1, 1);
     require(first.find("\"status\":\"ready\"") != std::string::npos, "Valid first batch was marked insufficient");
     const auto times = markerTimes(first);
+    require(first.find("\"onset_ms\":-2000,") != std::string::npos,
+            "First batch must distinguish heart-rate onset from alert confirmation");
     require(times.size() >= 3 && times.front() <= -2000 && times.back() >= 0 &&
                 std::ranges::is_sorted(times) && std::ranges::adjacent_find(times) == times.end(),
             "First batch must include chronological frames around onset and confirmation");

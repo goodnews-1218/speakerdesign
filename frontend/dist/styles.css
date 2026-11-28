@@ -86,3 +86,75 @@ button,.new-session,.nav-item,.subtle-button,.outline-button,.page-heading .outl
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Shared workspace surfaces */
+:root {
+  --bg: #eef2f1;
+  --ink: #152b29;
+  --muted: #516663;
+  --line: #d7e0de;
+  --green: #126652;
+  --green-dark: #104e40;
+  --mint: #e2f0eb;
+  --workspace-gap: 20px;
+  --workspace-edge: clamp(20px, 3vw, 44px);
+}
+
+main { padding: 28px var(--workspace-edge) 32px; }
+.topbar { padding-inline: var(--workspace-edge); background: var(--paper); }
+.skip-link { position: fixed; z-index: 100; inset: 8px auto auto 8px; padding: 12px 16px; transform: translateY(-160%); background: var(--paper); color: var(--green-dark); }
+.skip-link:focus { transform: none; }
+.page-heading { gap: 12px; margin-bottom: 20px; align-items: center; }
+.page-heading h1 { margin: 0; font-size: 2rem; letter-spacing: -.026em; }
+.page-heading .outline-button { margin: 0; flex-shrink: 0; }
+.panel { border-radius: 12px; box-shadow: none; }
+.panel .panel-header { height: auto; min-height: 56px; padding: 12px 16px; }
+.panel .panel-title h2 { font-size: 1rem; font-weight: 700; letter-spacing: 0; }
+
+#conversation-view .workspace-grid { gap: var(--workspace-gap); align-items: stretch; }
+#conversation-view :is(.input-column, .conversation-column) {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: var(--workspace-gap);
+  margin: 0;
+}
+#conversation-view :is(.audio-panel, .answer-panel) { margin: 0; min-height: 0; }
+#conversation-view .answer-panel { flex: 1; }
+#conversation-view .answer-content { min-height: 8rem; padding: 16px; color: var(--ink); }
+#conversation-view .answer-content.empty-answer { color: var(--muted); }
+#conversation-view .video-stage { height: auto; aspect-ratio: 16 / 9; background: #16302d; }
+#conversation-view .video-stage.has-playback { aspect-ratio: auto; min-height: 220px; }
+#conversation-view .video-stage:fullscreen { height: 100vh; }
+#conversation-view .video-stage::before { content: none; }
+#conversation-view .video-stage:not(.has-feed) :is(.video-topline, .video-bottomline) { visibility: hidden; }
+.camera-placeholder > .icon { width: 26px; height: 26px; margin-bottom: 4px; }
+.camera-placeholder h3 { margin: 0 0 10px; }
+#conversation-view .camera-start { margin: 0; min-height: 40px; }
+#conversation-view .flow-strip:not(:has(.flow-node.active)) { display: none; }
+#conversation-view .flow-strip { margin: 0; }
+#conversation-view .mode-banner { margin-bottom: var(--workspace-gap); padding: 6px 14px; background: #e5eeeb; }
+#conversation-view .mode-banner strong { color: var(--ink); }
+#conversation-view .mode-banner div > span:not(.demo-icon),
+#conversation-view :is(#describe-help, .audio-note, .transcript-meta) { font-size: .8125rem; color: var(--muted); }
+#conversation-view .mode-banner button { min-height: 40px; max-width: none; }
+#conversation-view .mode-banner .demo-icon,
+#conversation-view .small-label,
+#conversation-view .conversation-tip,
+#conversation-view .transcript-footer > span { display: none; }
+#conversation-view .transcript-footer { justify-content: flex-end; }
+.primary-button:hover:not(:disabled), .outline-button:hover:not(:disabled) { transform: translateY(-1px); }
+.primary-button:active:not(:disabled), .outline-button:active:not(:disabled) { transform: translateY(1px); }
+
+@media (max-width: 640px) {
+  :root { --workspace-edge: 16px; --workspace-gap: 14px; }
+  main { padding-top: 20px; }
+  .page-heading h1 { font-size: 1.65rem; }
+  .page-heading .outline-button { min-width: 44px; min-height: 44px; }
+  #conversation-view .video-stage { min-height: 190px; }
+  #conversation-view .camera-placeholder { inset: 12% 8%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primary-button:hover:not(:disabled), .outline-button:hover:not(:disabled) { transform: none; }
+}

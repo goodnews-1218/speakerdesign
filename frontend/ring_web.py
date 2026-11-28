@@ -110,7 +110,7 @@ def event_states(result, capture, verdict, active):
     return analysis, alarm
 
 
-def list_events(session, active):
+def list_events(session, active, limit=24):
     directories = []
     alerts = session / "fall-alerts"
     try:
@@ -130,7 +130,7 @@ def list_events(session, active):
         if not marker:
             continue
         episodes.add(episode)
-        if episode not in events and len(events) == 24:
+        if episode not in events and len(events) == limit:
             continue
         try:
             job = load_event(marker)
@@ -164,10 +164,15 @@ def list_events(session, active):
             voice = "stopped"
         states = {"verdict": verdict, "summary": summary, "capture_state": capture,
                   "analysis_state": analysis, "alarm_state": alarm, "voice_state": voice,
-                  "urgent": result.get("urgent") is True and verdict == "suspected_fall" and voice == "no_reply",
+                  "urgent": result.get("urgent") is True
+                  and verdict in ("suspected_fall", "suspected_immobility") and voice == "no_reply",
                   "alarm_reason": alarm_reason if isinstance(alarm_reason, str) else None}
-        event = events.setdefault(episode, {"id": f"event-{episode}", "created_at": created_at,
-                                           "alarm_played": False, "frames": {}, "batches": []})
+        event = events.setdefault(episode, {"id": f"event-{episode}", "session_id": session.name,
+                                           "created_at": created_at, "demo": job["demo"], "onset_ms": None,
+                                           "alarm_played": False, "frames": {}, "observations": {}, "batches": []})
+        onset = job.get("onset_ms")
+        if type(onset) is int and -120000 <= onset <= 0:
+            event["onset_ms"] = onset
         if ("verdict" not in event or
                 (states["urgent"], VERDICT_PRIORITY.index(verdict)) >=
                 (event["urgent"], VERDICT_PRIORITY.index(event["verdict"]))):
@@ -181,10 +186,23 @@ def list_events(session, active):
                 frame_count += 1
                 event["frames"].setdefault(timestamp, {"url": media_url(session, frame),
                                                        "time_ms": timestamp})
+        evidence = result.get("evidence")
+        if isinstance(times, list) and isinstance(evidence, list):
+            for item in evidence[:4]:
+                if not isinstance(item, dict):
+                    continue
+                frame, note = item.get("frame"), item.get("observation")
+                if (type(frame) is int and 1 <= frame <= min(len(times), MAX_FRAMES)
+                        and type(times[frame - 1]) is int and isinstance(note, str) and note.strip()):
+                    event["observations"].setdefault(times[frame - 1], note.strip()[:100])
         event["batches"].append({"id": event_id, "created_at": created_at, "frame_count": frame_count,
                                  "alarm_played": alarm == "played", **states})
     for event in events.values():
         event["frames"] = [frame for _, frame in sorted(event["frames"].items())]
+        pivot = event["onset_ms"] if event["onset_ms"] is not None else 0
+        observations = sorted(event.pop("observations").items())
+        event["before"] = list(dict.fromkeys(note for stamp, note in observations if stamp < pivot))[-3:]
+        event["after"] = list(dict.fromkeys(note for stamp, note in observations if stamp >= pivot))[:3]
         if event["alarm_played"]:
             event.update(alarm_state="played", alarm_reason=None)
     return list(events.values()), len(episodes), demo, analyze_demo
@@ -274,6 +292,27 @@ class RingMonitorSession:
                 except OSError:
                     pass
         return reply
+
+    def history(self, before=None):
+        with self.lock:
+            session = self.session
+            active = self.state in ACTIVE_STATES
+        sessions = sorted(
+            ((int(path.name.split("-")[1]), path) for path in self.recordings.glob("session-*")
+             if SESSION_NAME.fullmatch(path.name) and path.is_dir() and not path.is_symlink()
+             and (path / "fall-alerts").is_dir() and not (path / "fall-alerts").is_symlink()),
+            reverse=True,
+        )
+        events = []
+        for number, path in sessions:
+            if before is not None and number >= before:
+                continue
+            if len(events) >= 16:
+                return {"events": events, "next_before": last}
+            saved, _, _, _ = list_events(path, active and path == session, limit=None)
+            events.extend(saved)
+            last = number
+        return {"events": events, "next_before": None}
 
     def preview_frames(self, name):
         last_stamp = None
@@ -431,10 +470,9 @@ class RingMonitorSession:
 
     def media(self, request):
         name, _, relative = request.partition("/")
-        with self.lock:
-            session = self.session
-        if not session or name != session.name:
+        if not SESSION_NAME.fullmatch(name):
             return None
+        session = self.recordings / name
         if VIDEO_NAME.fullmatch(relative):
             content_type = "video/mp4"
         elif relative == PREVIEW:

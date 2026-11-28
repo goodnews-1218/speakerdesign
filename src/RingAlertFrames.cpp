@@ -179,7 +179,12 @@ void RingAlertFrames::publish(const Batch& batch, const std::vector<std::shared_
     std::ofstream out(temporary);
     out << "{\"version\":1,\"demo\":" << (demo_ ? "true" : "false")
         << ",\"episode\":" << batch.episode << ",\"batch\":" << batch.number
-        << ",\"status\":\"" << status << "\",\"times_ms\":[";
+        << ",\"status\":\"" << status << '"';
+    if (batch.onset) {
+        out << ",\"onset_ms\":" << std::chrono::duration_cast<std::chrono::milliseconds>(
+            *batch.onset - batch.confirmed).count();
+    }
+    out << ",\"times_ms\":[";
     for (size_t index = 0; index < times.size(); ++index) {
         if (index) out << ',';
         out << times[index];

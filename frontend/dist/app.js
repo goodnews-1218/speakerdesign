@@ -4,7 +4,7 @@
   const $ = (id) => document.getElementById(id);
   const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const initialAnswer = '你好，我是你的语音助手。\n\n从一句话开始，我可以成为你身边的灵感搭档。\n\n聊一聊：回答问题、整理思路，让复杂的事情更清楚。\n看一看：选择“描述当前画面”，拍照并获得 DeepSeek 的语音描述。\n听一听：把回答读给你听，让交流更自然。\n\n这是示例回答。连接模型服务后，这里将显示真实回复。';
+  const initialAnswer = '我可以回答问题，也可以描述摄像头画面。试试输入问题，或点击「描述当前画面」。';
   const exampleQuestion = '你好，介绍一下你能帮我做什么吧。';
   const describeQuestion = '描述一下你看到的画面';
   const localService = /^https?:$/.test(window.location.protocol) ? window.location.origin : '';
@@ -80,7 +80,7 @@
     $('answer-model').append(mark, document.createTextNode(modelName || (kind === 'demo' ? '演示助手' : '已连接模型')));
     $('copy-answer').disabled = !text; $('speak-answer').disabled = !text;
   }
-  function emptyAnswer(message = '你的下一句，值得一个好回答。') {
+  function emptyAnswer(message = '输入问题后，回答会显示在这里。') {
     clearDescriptionMedia();
     answer = ''; answerQuestion = ''; $('answer-content').className = 'answer-content empty-answer';
     answerKind = config.mode === 'demo' ? 'demo' : 'model';

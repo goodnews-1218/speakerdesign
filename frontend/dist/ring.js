@@ -29,7 +29,7 @@
   };
   const verdicts = {
     suspected_fall: ['疑似跌倒或突然瘫软', 'danger'],
-    suspected_immobility: ['预警后持续未见明显动作', 'danger'],
+    suspected_immobility: ['预警后持续坐姿不动', 'danger'],
     acknowledged: ['已收到语音确认', 'clear'],
     no_visible_fall: ['未发现明显跌倒', 'clear'],
     uncertain: ['画面无法确认', 'pending'],
@@ -48,7 +48,7 @@
   const analysisLabels = {
     queued: ['排队中，尚未提交', 'warning'],
     requesting: ['请求中，等待 DeepSeek 返回', 'warning'],
-    received: ['已收到 DeepSeek 响应', 'success'],
+    received: ['分析已返回', 'success'],
     failed: ['分析请求失败', 'error'],
     skipped: ['未提交本批画面', ''],
     unknown: ['提交状态未记录', ''],
@@ -57,7 +57,7 @@
     pending: ['等待分析结果', 'warning'],
     confirming: ['等待语音确认', 'warning'],
     playing: ['正在通过 Windows 播放', 'warning'],
-    played: ['Windows 已完成播放', 'success'],
+    played: ['已响铃', 'success'],
     failed: ['Windows 音频播放失败', 'error'],
     skipped: ['未触发警报声', ''],
     unknown: ['播放状态未记录', ''],
@@ -95,6 +95,10 @@
   let previewAttempt = 0;
   let eventSignature = '';
   let eventAnnouncements = new Map();
+  let historyItems = [];
+  let historyCursor = null;
+  let historyLoading = false;
+  let historyNeeded = true;
   let videoSignature = '';
   let selectedVideo = '';
 
@@ -143,10 +147,10 @@
     $('ring-demo-analysis-option').hidden = !demo.checked;
     analyzeDemo.disabled = locked || !demo.checked;
     const help = !demo.checked
-      ? '启动 BioScope 并连接戒指。预警画面及语音确认片段会发送给 DeepSeek。'
+      ? '连接 BioScope 戒指。预警抽帧与语音确认片段会提交给 DeepSeek。'
       : analyzeDemo.checked
-        ? '模拟心率使用真实摄像头和麦克风。画面和语音片段会发送给 DeepSeek，未确认平安时会响铃。'
-        : '抽帧保存在本机。勾选完整流程可测试画面分析、语音确认和响铃。';
+        ? '使用真实画面及语音，提交给 DeepSeek。未确认平安时会响铃。'
+        : '仅保存本地录像与抽帧。';
     const helpNode = $('ring-start-help');
     if (helpNode.textContent !== help) helpNode.textContent = help;
     const message = actionError || connectionError || status?.error || '';
@@ -212,7 +216,7 @@
       voice = stages.voice;
       if (latest.verdict !== 'pending') {
         const [verdict, tone] = verdicts[latest.verdict] || [];
-        detail = [latest.urgent ? '高优先级：疑似失去意识，请立即查看现场' : verdict,
+        detail = [latest.urgent ? '高优先级：未收到回应，请立即查看现场' : verdict,
           latest.summary].filter(Boolean).join(' · ');
         detailTone = tone === 'danger' ? 'error' : '';
       }
@@ -303,31 +307,48 @@
     $('ring-preview-state').textContent = '正在重连画面';
   });
 
-  function frameTime(value) {
+  function frameTime(value, pivot) {
     if (!Number.isFinite(value)) return '片段画面';
-    if (value === 0) return '预警时刻';
-    return (value < 0 ? '预警前 ' : '预警后 ') + (Math.abs(value) / 1000).toFixed(1) + ' 秒';
+    const offset = value - (pivot ?? 0);
+    const name = pivot == null ? '确认' : '异常';
+    if (offset === 0) return name + '时刻';
+    return (offset < 0 ? name + '前 ' : name + '后 ') + (Math.abs(offset) / 1000).toFixed(1) + ' 秒';
   }
+
+  const eventKey = (item) => `${item.session_id || session}/${item.id}`;
 
   function renderEvent(item, expanded, defaultOpen) {
     const [verdict, tone] = verdicts[item.verdict] || ['等待确认', 'pending'];
     const event = element('details', 'ring-event');
-    event.dataset.eventId = String(item.id);
-    event.open = expanded.get(String(item.id)) ?? defaultOpen;
+    const key = eventKey(item);
+    event.dataset.eventId = key;
+    event.open = expanded.get(key) ?? defaultOpen;
     const header = element('summary', 'ring-event-heading');
-    const episode = episodeNumber(item);
-    const title = episode ? '预警 ' + episode : '心率预警';
+    const timestamp = new Date(item.created_at);
+    const title = Number.isNaN(timestamp.getTime()) ? '心率预警' : timestamp.toLocaleString();
     header.append(
-      element('span', 'ring-event-name', title),
-      element('span', 'ring-badge ring-verdict ' + tone, item.urgent ? '高优先级 · 疑似失去意识' : verdict),
+      element('span', 'ring-event-name', title + (item.demo ? ' · 模拟' : '')),
+      element('span', 'ring-badge ring-verdict ' + tone, item.urgent ? '高优先级 · 未收到回应' : verdict),
     );
     const body = element('div', 'ring-event-body');
     appendEventResult(body, item);
-    const frames = element('div', 'ring-frames');
+    const pivot = Number.isFinite(item.onset_ms) ? item.onset_ms : null;
+    const phases = ['before', 'after'].map((phase, index) => {
+      const block = element('section', 'ring-phase');
+      const stage = pivot == null ? '预警确认' : '心率异常';
+      block.append(element('h3', 'ring-phase-title', stage + (index === 0 ? '前' : '后')));
+      const notes = item[phase] || [];
+      block.append(element('p', 'ring-phase-observation', notes.length ? notes.join(' ') : '这段暂无可用的画面描述。'));
+      const frames = element('div', 'ring-frames');
+      block.append(frames);
+      body.append(block);
+      return frames;
+    });
     for (const frame of item.frames || []) {
       const source = mediaUrl(frame.url);
       if (!source) continue;
-      const time = frameTime(frame.time_ms);
+      const time = frameTime(frame.time_ms, pivot);
+      const before = frame.time_ms < (pivot ?? 0);
       const link = element('a', 'ring-frame');
       link.href = source;
       link.target = '_blank';
@@ -338,51 +359,33 @@
       image.loading = 'lazy';
       const label = element('span', 'ring-frame-time', time);
       if (Number.isFinite(frame.time_ms)) {
-        label.dataset.phase = frame.time_ms < 0 ? 'before' : frame.time_ms > 0 ? 'after' : 'at';
+        label.dataset.phase = before ? 'before' : frame.time_ms === (pivot ?? 0) ? 'at' : 'after';
       }
       link.append(image, label);
-      frames.append(link);
-    }
-    if (frames.childElementCount) body.append(frames);
-    if (item.batches?.length > 1) {
-      for (const batch of item.batches) {
-        const detail = element('details', 'ring-event-batch');
-        detail.dataset.eventId = String(batch.id);
-        detail.open = expanded.get(String(batch.id)) ?? false;
-        const batchNumber = /^event-\d+-(\d+)$/.exec(String(batch.id))?.[1];
-        const label = verdicts[batch.verdict]?.[0] || '等待确认';
-        const title = batchNumber ? `第 ${batchNumber} 组 · ${label}` : label;
-        const result = element('div', 'ring-event-body');
-        appendEventResult(result, batch);
-        detail.append(element('summary', '', title), result);
-        body.append(detail);
-      }
+      phases[before ? 0 : 1].append(link);
     }
     event.append(header, body);
     return event;
   }
 
   function appendEventResult(body, item) {
-    const timestamp = item.created_at ? new Date(item.created_at) : null;
-    if (timestamp && !Number.isNaN(timestamp.getTime())) {
-      const time = element('time', 'ring-event-meta', timestamp.toLocaleString());
-      time.dateTime = timestamp.toISOString();
-      body.append(time);
-    }
     if (item.summary) body.append(element('p', 'ring-event-summary', item.summary));
-    const { capture, analysis, alarm, voice } = eventStages(item);
+    const { alarm, voice } = eventStages(item);
     const stages = element('dl', 'ring-event-stages');
-    for (const [label, value] of [['抽帧', capture], ['DeepSeek', analysis], ['语音确认', voice], ['警报声', alarm]]) {
+    for (const [label, value] of [['语音确认', voice], ['警报声', alarm]]) {
       stages.append(element('dt', '', label), element('dd', '', value[0]));
     }
     body.append(stages);
   }
 
   function renderEvents(data) {
-    const items = Array.isArray(data.events) ? data.events : [];
+    const current = Array.isArray(data.events) ? data.events : [];
+    const combined = new Map(historyItems.map((item) => [eventKey(item), item]));
+    for (const item of current) combined.set(eventKey(item), item);
+    const items = [...combined.values()].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
     const signature = JSON.stringify(items);
     const empty = $('ring-events-empty');
-    $('ring-event-count').textContent = items.length + ' 条';
+    $('ring-event-count').textContent = items.length + (historyCursor == null ? ' 条' : '+ 条');
     empty.hidden = items.length > 0;
     let emptyText = '心率偏离正常区间后，分析结果会显示在这里。';
     if (data.warning_count > 0) {
@@ -393,13 +396,39 @@
     const list = $('ring-events');
     const expanded = new Map([...list.querySelectorAll('details[data-event-id]')]
       .map((event) => [event.dataset.eventId, event.open]));
-    const announcements = new Map(items.map((item) => [String(item.id), item.urgent
+    const announcements = new Map(current.map((item) => [eventKey(item), item.urgent
       ? '高优先级预警，请立即查看现场' : (verdicts[item.verdict]?.[0] || '等待确认')]));
     const changed = [...announcements].find(([id, message]) => eventAnnouncements.get(id) !== message);
     eventAnnouncements = announcements;
     if (changed) $('ring-event-update').textContent = changed[1] + '。';
     list.replaceChildren(...items.map((item, index) => renderEvent(item, expanded, index === 0)));
     eventSignature = signature;
+  }
+
+  async function loadHistory(older = false) {
+    if (historyLoading || (older && historyCursor == null)) return;
+    historyLoading = true;
+    const button = $('ring-history-more');
+    const message = $('ring-history-status');
+    button.disabled = true;
+    message.textContent = '正在读取历史预警…';
+    try {
+      const endpoint = older ? `history/${historyCursor}` : 'history';
+      const data = await request('GET', endpoint, new AbortController());
+      historyItems = [...new Map([...historyItems, ...data.events].map((item) => [eventKey(item), item])).values()];
+      if (older || historyNeeded) historyCursor = data.next_before;
+      historyNeeded = false;
+      message.textContent = '';
+    } catch {
+      message.textContent = '历史记录读取失败，请重试。';
+      historyNeeded = true;
+    } finally {
+      historyLoading = false;
+      button.disabled = false;
+      button.textContent = historyNeeded ? '重新读取历史' : '加载更早的预警';
+      button.hidden = !historyNeeded && historyCursor == null;
+      if (status) renderEvents(status);
+    }
   }
 
   function videoLabel(name) {
@@ -467,12 +496,13 @@
   }
 
   function renderStatus(data) {
+    const finished = isActive(status?.state) && !isActive(data.state);
     if (session !== data.session) {
+      if (session && !historyNeeded) loadHistory();
       session = data.session;
       resetVideo();
       eventSignature = '';
       eventAnnouncements = new Map();
-      $('ring-events').replaceChildren();
       $('ring-event-update').textContent = '';
       videoSignature = '';
     }
@@ -497,6 +527,8 @@
     renderDiagnostic(data);
     renderPreview(data);
     renderEvents(data);
+    if (historyNeeded && !historyLoading && !$('ring-history-status').textContent) loadHistory();
+    else if (finished && !historyNeeded) loadHistory();
     renderVideos(data);
     updateControls();
   }
@@ -512,7 +544,7 @@
       const response = await fetch('/api/ring/' + endpoint, options);
       const data = await response.json().catch(() => null);
       if (!response.ok) throw new Error(data?.error || data?.message || '戒指服务请求失败。');
-      if (endpoint === 'test-alarm') return data;
+      if (endpoint === 'test-alarm' || endpoint.startsWith('history')) return data;
       if (!data || !Object.hasOwn(stateLabels, data.state)) throw new Error('无法读取戒指服务状态。');
       return data;
     } finally {
@@ -629,6 +661,7 @@
   analyzeDemo.addEventListener('change', updateControls);
   $('ring-stop').addEventListener('click', () => performAction('stop', {}));
   $('ring-test-alarm').addEventListener('click', testAlarm);
+  $('ring-history-more').addEventListener('click', () => loadHistory(!historyNeeded));
   $('ring-view-events').addEventListener('click', () => {
     const heading = $('ring-events-title');
     heading.focus({ preventScroll: true });

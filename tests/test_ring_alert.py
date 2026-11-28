@@ -193,16 +193,22 @@ class RingAlertTests(unittest.TestCase):
 
     def test_stillness_needs_sustained_post_alert_evidence(self):
         response = {"verdict": "suspected_immobility", "summary": "同一人坐在座位上，未见明显动作。",
-                    "evidence": [{"frame": n, "posture": "upright_or_seated", "observation": "仍坐在原处。"}
+                    "evidence": [{"frame": n, "posture": "seated", "observation": "仍坐在原处。"}
                                  for n in range(1, 4)]}
         self.client.complete.return_value = json.dumps(response)
         valid = self.make_event(1, times=(300, 3300, 6300))
         for n, times in enumerate(((-3000, 0, 3000), (0, 2000, 4000), (0, 2000, 7000)), 2):
             self.make_event(n, times=times)
-        self.consume(reply="unavailable").assert_called_once()
+        self.consume(reply="no_reply").assert_called_once()
         self.assertTrue(self.result(valid)["alarm_played"])
+        self.assertTrue(self.result(valid)["urgent"])
         for n in range(2, 5):
             self.assertEqual(self.result(self.root / f"event-{n}")["verdict"], "uncertain")
+
+        for evidence in response["evidence"]:
+            evidence["posture"] = "upright_or_seated"
+        self.client.complete.return_value = json.dumps(response)
+        self.assertEqual(assess_fall(self.client, list(zip((300, 3300, 6300), PHOTOS))).verdict, "uncertain")
 
     def test_voice_reads_only_post_prompt_audio_and_requires_explicit_confirmation(self):
         mic_path = self.root / "mic.wav"
