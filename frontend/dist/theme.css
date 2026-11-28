@@ -27,6 +27,8 @@
 }
 
 body {
+  /* Keep the shell's top inset inside the viewport gradient. */
+  display: flow-root;
   min-height: 100dvh;
   background: var(--backlight);
   scrollbar-color: #6f6264 transparent;
