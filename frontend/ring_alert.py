@@ -119,7 +119,7 @@ def play_alarm():
     if winsound is None:
         raise RuntimeError("声音警报需要 Windows 音频。")
     rate = 24000
-    notes = (880, 0, 1175, 0, 880, 0, 1175, 0, 880, 0, 1175)
+    notes = ((880, 0, 1175, 0) * 8)[:-1]
     pcm = array("h")
     for tone in notes:
         length = int(rate * (0.22 if tone else 0.13))

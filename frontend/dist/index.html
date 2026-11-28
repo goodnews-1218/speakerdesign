@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#146b57">
+  <meta name="theme-color" content="#18191f">
   <meta name="description" content="声境 Connect 的本地工作台，支持音箱画面、语音对话和戒指心率预警。">
   <meta name="page-type" content="software">
   <meta name="site-kind" content="software">
@@ -11,6 +11,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23146b57'/%3E%3Cpath d='M16 28v8m8-16v24m8-30v36m8-30v24m8-16v8' stroke='white' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="ring.css">
+  <link rel="stylesheet" href="theme.css">
   <script src="app.js" defer></script>
   <script src="ring.js" defer></script>
 </head>
@@ -41,34 +42,34 @@
     <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H5v20h14V7l-5-5Zm0 0v6h5M8 12h8M8 16h6"/></symbol>
   </defs></svg>
 
+  <div class="app-shell">
   <aside class="sidebar">
-    <a class="brand" href="./" aria-label="声境首页"><span class="brand-mark"><svg class="icon"><use href="#i-wave"/></svg></span><span>声境<span class="brand-en">CONNECT STUDIO</span></span></a>
-    <button class="new-session" id="new-session"><svg class="icon"><use href="#i-plus"/></svg>开启新对话<span class="key-hint">N</span></button>
+    <a class="brand" href="./" aria-label="声境首页"><span class="brand-mark"><svg class="icon"><use href="#i-wave"/></svg></span><span>声境</span></a>
     <div class="sidebar-label">工作空间</div>
     <button class="nav-item active" id="workspace-nav" aria-controls="conversation-view" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#i-grid"/></svg>对话工作台</button>
     <button class="nav-item" id="ring-nav" aria-controls="ring-monitor"><svg class="icon" aria-hidden="true"><use href="#i-wave"/></svg>戒指预警</button>
-    <button class="nav-item" id="history-nav"><svg class="icon"><use href="#i-clock"/></svg>对话记录<span class="nav-count" id="history-count">0</span></button>
-    <div class="history-heading"><span class="sidebar-label">最近对话</span><span class="local-label">仅本机</span></div>
-    <div class="recent-list" id="recent-list"><p class="history-empty">从一句话开始，<br>让想法被听见。</p></div>
     <div class="sidebar-bottom">
       <div class="sidebar-connection" id="sidebar-connection" role="status"><span class="status-dot" aria-hidden="true"></span><span id="sidebar-device">音箱未连接</span></div>
-      <div class="workspace-user"><span class="avatar">我</span><div><strong>我的工作空间</strong><span>本地对话 · v1.0</span></div><button class="icon-button" id="sidebar-settings" aria-label="连接设置"><svg class="icon"><use href="#i-settings"/></svg></button></div>
+      <div class="workspace-user"><span class="avatar">我</span><div><strong>我的工作空间</strong><span>本地对话 · v1.0</span></div></div>
     </div>
   </aside>
 
   <div class="page-shell">
-    <header class="topbar"><div class="breadcrumbs"><span>工作空间</span><span>/</span><strong id="workspace-breadcrumb">对话工作台</strong></div><div class="topbar-actions"><button class="icon-button mobile-tool" id="mobile-new" aria-label="新对话"><svg class="icon"><use href="#i-plus"/></svg></button><button class="icon-button mobile-tool" id="mobile-history" aria-label="查看对话记录"><svg class="icon"><use href="#i-clock"/></svg></button><span class="connection-label" id="connection-label"><span class="status-dot"></span>设备未连接</span><button class="subtle-button" id="settings-button"><svg class="icon"><use href="#i-settings"/></svg>连接设置</button></div></header>
+    <header class="topbar"><div class="breadcrumbs"><span>工作空间</span><span>/</span><strong id="workspace-breadcrumb">对话工作台</strong></div><div class="topbar-actions"><span class="connection-label" id="connection-label"><span class="status-dot"></span>设备未连接</span></div></header>
     <nav class="workspace-mobile-nav" aria-label="切换工作台">
       <button id="mobile-workspace-nav" type="button" aria-controls="conversation-view" aria-current="page">对话工作台</button>
       <button id="mobile-ring-nav" type="button" aria-controls="ring-monitor">戒指预警</button>
     </nav>
     <main id="workspace-main" tabindex="-1">
       <div id="conversation-view" data-mobile-panel="input">
-      <section class="page-heading"><h1>对话工作台</h1><button class="outline-button" id="export-button" aria-label="导出对话"><svg class="icon"><use href="#i-download"/></svg>导出对话</button></section>
-      <nav class="conversation-mobile-tabs" aria-label="切换对话面板">
-        <button id="mobile-conversation-input" type="button" aria-controls="conversation-input-panel" aria-pressed="true">画面与输入</button>
-        <button id="mobile-conversation-answer" type="button" aria-controls="conversation-answer-panel" aria-pressed="false">AI 的回答</button>
-      </nav>
+      <header class="workspace-heading">
+        <h1>对话工作台</h1>
+        <div class="workspace-heading-actions">
+          <button class="outline-button" id="connection-settings" type="button" aria-haspopup="dialog" aria-label="连接设置"><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg><span>连接设置</span></button>
+          <button class="outline-button" id="export-button" type="button" aria-label="导出对话"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg><span>导出对话</span></button>
+        </div>
+      </header>
+
       <div class="workspace-grid">
         <section class="input-column" id="conversation-input-panel" aria-label="画面与输入">
           <div class="panel camera-panel">
@@ -77,18 +78,19 @@
               <video id="camera-video" autoplay muted playsinline hidden></video>
               <img id="camera-image" alt="音箱摄像头传来的实时画面" hidden>
               <div class="camera-placeholder" id="camera-placeholder"><svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg><h3>摄像头未开启</h3><button class="camera-start" id="start-camera">开启摄像头</button></div>
-              <div class="video-topline"><span class="feed-label" id="feed-label">CAMERA PREVIEW</span><span id="video-dimensions">等待视频源</span></div>
+              <div class="video-topline"><span class="feed-label" id="feed-label">摄像头预览</span><span id="video-dimensions">等待视频源</span></div>
               <div class="video-bottomline"><span id="camera-source-label">尚未接入画面</span><div><button class="video-tool" id="snapshot-button" aria-label="保存当前画面" disabled><svg class="icon"><use href="#i-snapshot"/></svg></button><button class="video-tool" id="fullscreen-button" aria-label="全屏查看画面"><svg class="icon"><use href="#i-expand"/></svg></button></div></div>
             </div>
             <div class="camera-footer"><label class="select-wrap"><svg class="icon"><use href="#i-camera"/></svg><select id="camera-source" aria-label="选择画面来源"><option value="browser">电脑 / USB 摄像头</option><option value="service">音箱视频服务</option><option value="file">本地视频文件</option></select><svg class="icon chevron"><use href="#i-chevron"/></svg></label><button class="text-button" id="camera-toggle">开启预览</button></div>
             <div class="describe-controls">
-              <button class="primary-button" id="describe-button" type="button" aria-describedby="describe-help">
+              <button class="primary-button" id="describe-button" type="button">
                 <svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg>描述当前画面
               </button>
-              <p id="describe-help">拍摄一张照片并发送给 DeepSeek，完成后语音播报。</p>
               <p id="describe-status" role="status" aria-live="polite" aria-atomic="true"></p>
             </div>
           </div>
+
+          <section class="mode-banner" id="mode-banner" aria-label="当前工作模式"><div><strong id="mode-title">先体验，再连接</strong><span id="mode-description">当前为演示模式，示例内容不来自音箱或大模型。</span></div><button id="demo-button" type="button">播放对话演示<svg class="icon" aria-hidden="true"><use href="#i-play"/></svg></button></section>
 
           <section class="panel audio-panel" aria-labelledby="audio-panel-title">
             <div class="panel-header">
@@ -101,12 +103,11 @@
               </div>
             </div>
             <div class="waveform" id="waveform" aria-hidden="true"></div>
-            <div class="audio-status"><span id="audio-status" role="status" aria-atomic="true">准备好，开始说话</span><span id="audio-source-label">演示输入</span></div>
+            <div class="audio-status" id="audio-status" role="status" aria-atomic="true">准备好，开始说话</div>
             <div class="audio-actions">
               <button class="primary-button record-button" id="record-button"><svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg><span>开始语音输入</span></button>
               <button class="outline-button upload-button" id="upload-button"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg>导入音频</button>
             </div>
-            <p class="audio-note" id="audio-note">演示模式使用示例文本，不会开启麦克风。</p>
             <audio id="audio-preview" controls hidden></audio>
             <div class="transcript-area">
               <div class="transcript-content">
@@ -139,10 +140,14 @@
           <audio id="reply-audio" preload="none" hidden></audio>
         </section>
       </div>
+      <nav class="conversation-mobile-tabs" aria-label="切换对话面板">
+        <button id="mobile-conversation-input" type="button" aria-controls="conversation-input-panel" aria-pressed="true">画面与输入</button>
+        <button id="mobile-conversation-answer" type="button" aria-controls="conversation-answer-panel" aria-pressed="false">AI 的回答</button>
+      </nav>
       </div>
 
       <section id="ring-monitor" class="ring-workspace" aria-labelledby="ring-title" hidden>
-        <header class="ring-header">
+        <header class="workspace-heading ring-header">
           <div>
             <h1 id="ring-title" tabindex="-1">戒指预警</h1>
           </div>
@@ -152,7 +157,6 @@
           </div>
         </header>
 
-        <div class="ring-layout">
           <section class="panel ring-preview-panel" aria-labelledby="ring-preview-title">
             <header class="panel-header">
               <div class="panel-title">
@@ -211,7 +215,7 @@
               </div>
               <div id="ring-demo-analysis-option" class="ring-demo-analysis" hidden>
                 <label class="ring-check">
-                  <input id="ring-demo-analysis" type="checkbox" aria-describedby="ring-start-help" disabled>
+                  <input id="ring-demo-analysis" type="checkbox" disabled>
                   测试完整预警流程
                 </label>
               </div>
@@ -219,15 +223,9 @@
                 <button id="ring-start" type="submit" class="primary-button" disabled>开始监测</button>
                 <button id="ring-stop" type="button" class="outline-button" disabled>停止监测</button>
               </div>
-              <details class="ring-monitor-help" open>
-                <summary>监测说明</summary>
-                <p class="ring-help" id="ring-start-help">预警抽帧与语音确认片段会提交给 DeepSeek。</p>
-                <p class="ring-help">有效心率偏离基线边界达 20% 且持续 6 秒，即触发预警。</p>
-              </details>
             </form>
             <p id="ring-status-message" class="ring-status-message" role="status" hidden></p>
           </section>
-        </div>
 
         <section class="panel ring-diagnostic" aria-labelledby="ring-diagnostic-title">
           <header class="panel-header">
@@ -235,27 +233,24 @@
               <svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg>
               <h2 id="ring-diagnostic-title">预警进度</h2>
             </div>
-            <button id="ring-test-alarm" type="button" class="outline-button" aria-describedby="ring-audio-output" disabled>
+            <button id="ring-test-alarm" type="button" class="outline-button" disabled>
               <svg class="icon" aria-hidden="true"><use href="#i-volume"/></svg>试听警报
             </button>
           </header>
-          <p class="ring-diagnostic-trigger" id="ring-trigger-state" role="status">正在连接本机服务</p>
-          <dl class="ring-diagnostic-steps" aria-live="polite" aria-atomic="true">
-            <div><dt>抽帧</dt><dd id="ring-capture-state">等待心率预警</dd></div>
-            <div><dt>DeepSeek</dt><dd id="ring-analysis-state">未提交</dd></div>
-            <div><dt>语音确认</dt><dd id="ring-voice-state">未开始</dd></div>
-            <div><dt>警报声</dt><dd id="ring-alarm-state">未触发</dd></div>
-          </dl>
-          <div class="ring-diagnostic-review" id="ring-diagnostic-review" hidden>
-            <p class="ring-help ring-diagnostic-detail" id="ring-diagnostic-detail" role="status" hidden></p>
-            <button id="ring-view-events" type="button" class="text-button" aria-controls="ring-events" hidden>查看预警记录</button>
+          <div class="ring-progress-wrap">
+            <progress id="ring-progress" max="4" value="0" aria-label="预警流程进度" aria-describedby="ring-trigger-state"></progress>
+            <ol class="ring-progress-stages" id="ring-progress-stages">
+              <li><svg class="icon" aria-hidden="true"><use href="#i-snapshot"/></svg><span>抽帧</span></li>
+              <li><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg><span>DeepSeek</span></li>
+              <li><svg class="icon" aria-hidden="true"><use href="#i-mic"/></svg><span>语音确认</span></li>
+              <li><svg class="icon" aria-hidden="true"><use href="#i-volume"/></svg><span>警报</span></li>
+            </ol>
+            <p class="ring-diagnostic-trigger" id="ring-trigger-state" role="status">正在连接本机服务</p>
           </div>
-          <p class="ring-help ring-diagnostic-note" id="ring-audio-output">警报使用 Windows 默认声音输出。实际能否听到，可点「试听警报」确认。</p>
           <p class="ring-help ring-diagnostic-note" id="ring-test-alarm-result" role="status" hidden></p>
         </section>
 
-        <div class="ring-layout ring-review-layout">
-          <section class="panel ring-review-panel" aria-labelledby="ring-events-title">
+          <section class="panel ring-review-panel ring-history-panel" aria-labelledby="ring-events-title">
             <header class="panel-header">
               <div class="panel-title">
                 <svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg>
@@ -263,42 +258,68 @@
               </div>
               <span id="ring-event-count" class="ring-muted"></span>
             </header>
-            <p id="ring-events-empty" class="ring-empty">本轮监测暂无预警。</p>
-            <p id="ring-event-update" class="sr-only" role="status"></p>
-            <div id="ring-events" class="ring-event-list"></div>
-            <div class="ring-history-footer">
-              <p id="ring-history-status" class="ring-help" role="status"></p>
-              <button id="ring-history-more" type="button" class="outline-button" hidden>加载更早的预警</button>
-            </div>
-          </section>
-
-          <section class="panel ring-review-panel" aria-labelledby="ring-recordings-title">
-            <header class="panel-header">
-              <div class="panel-title">
-                <svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>
-                <h2 id="ring-recordings-title">录像回看</h2>
+            <div class="ring-history-scroll">
+              <p id="ring-events-empty" class="ring-empty">暂无预警记录。</p>
+              <div id="ring-events" class="ring-event-list"></div>
+              <div class="ring-history-footer">
+                <p id="ring-history-status" class="ring-help" role="status"></p>
+                <button id="ring-history-more" type="button" class="outline-button" hidden>加载更早的预警</button>
               </div>
-              <span id="ring-video-count" class="ring-muted"></span>
-            </header>
-            <p id="ring-videos-empty" class="ring-empty">完成的录像和预警片段会显示在这里。</p>
-            <div class="ring-player" id="ring-player" hidden>
-              <p id="ring-video-name" class="ring-player-title"></p>
-              <video id="ring-video" controls playsinline preload="metadata" aria-labelledby="ring-video-name"></video>
-              <p id="ring-video-error" class="ring-status-message" role="status" hidden></p>
             </div>
-            <ul id="ring-videos" class="ring-video-list" aria-label="选择已保存录像"></ul>
           </section>
-        </div>
-        <p class="ring-footnote">预警与语音确认仅供人工查看现场时参考。</p>
       </section>
 
       <footer class="page-footer"><span>CONNECT STUDIO <span class="footer-divider">/</span> 为自然的交流而设计</span><span id="footer-status">音箱未连接 · 模型未连接</span></footer>
     </main>
   </div>
 
-  <dialog id="settings-dialog" class="settings-dialog"><form id="settings-form"><div class="dialog-header"><div><p class="eyebrow">MAKE A CONNECTION</p><h2>连接你的设备与模型</h2></div><button class="icon-button" type="button" data-close="settings-dialog" aria-label="关闭设置"><svg class="icon"><use href="#i-close"/></svg></button></div><p class="dialog-description">切换语音来源。手动开启预览，或发出画面描述指令后拍照。</p><label class="field-label" for="mode-select">工作模式</label><div class="select-wrap dialog-select"><select id="mode-select"><option value="demo">演示模式 · 无需设备和模型</option><option value="browser">电脑麦克风 · 浏览器语音识别</option><option value="service">音箱服务 · 真实设备采集</option></select><svg class="icon chevron"><use href="#i-chevron"/></svg></div><p class="field-help" id="mode-help">示例对话仅演示交互，不会调用大模型。</p><label class="field-label" for="service-url">电脑端服务地址</label><input id="service-url" type="url" placeholder="留空使用本地服务" autocomplete="off"><p class="field-help">留空使用本地服务。填写地址可连接已有的电脑端服务。</p><label class="field-label" for="video-url">音箱画面地址（可选）</label><input id="video-url" type="url" placeholder="http://127.0.0.1:8765/api/video.mjpeg" autocomplete="off"><p class="field-help">支持 MJPEG、图片流或浏览器可播放的视频地址。先启动设备视频服务。</p><div class="settings-result" id="settings-result" role="status">尚未检测服务</div><div class="dialog-footer"><button class="outline-button" type="button" id="test-connection">检测服务</button><button class="primary-button" type="submit">保存设置</button></div></form></dialog>
+  </div>
 
-  <dialog id="history-dialog" class="history-dialog"><div class="dialog-header"><div><p class="eyebrow">YOUR CONVERSATIONS</p><h2>对话记录</h2></div><button class="icon-button" data-close="history-dialog" aria-label="关闭对话记录"><svg class="icon"><use href="#i-close"/></svg></button></div><div id="history-list"></div><div class="dialog-footer"><span class="field-help">最多保留最近 30 条，仅保存在本机。</span><button class="danger-button" id="clear-history">清空记录</button></div></dialog>
+  <dialog id="ring-event-dialog" class="ring-event-dialog" aria-labelledby="ring-event-title">
+    <header class="ring-detail-header">
+      <button id="ring-event-back" class="outline-button" type="button" autofocus>← 返回预警记录</button>
+      <h2 id="ring-event-title">预警详情</h2>
+      <span id="ring-event-verdict" class="ring-badge" hidden></span>
+    </header>
+    <div class="ring-detail-content">
+      <p id="ring-event-status" class="ring-help" role="status"></p>
+      <div class="ring-detail-grid" id="ring-detail-grid" hidden>
+          <section class="panel ring-review-panel" aria-labelledby="ring-frames-title">
+            <header class="panel-header"><div class="panel-title"><h3 id="ring-frames-title">事件分析与抽帧</h3></div></header>
+            <div id="ring-event-detail" class="ring-event-body"></div>
+          </section>
+          <section class="panel ring-review-panel" aria-labelledby="ring-recordings-title">
+            <header class="panel-header">
+              <div class="panel-title">
+                <svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>
+                <h3 id="ring-recordings-title">录像回看</h3>
+              </div>
+              <span id="ring-video-count" class="ring-muted"></span>
+            </header>
+            <div class="ring-player" id="ring-player" hidden>
+              <p id="ring-video-name" class="ring-player-title"></p>
+              <video id="ring-video" controls playsinline preload="metadata" aria-labelledby="ring-video-name"></video>
+              <p id="ring-video-error" class="ring-status-message" role="status" hidden></p>
+            </div>
+            <div id="ring-videos" class="ring-replay-groups">
+              <section aria-labelledby="ring-clips-title">
+                <h4 id="ring-clips-title">预警片段</h4>
+                <p id="ring-clips-empty" class="ring-replay-empty">暂无可回看的预警片段。</p>
+                <ul id="ring-clips-list" class="ring-video-list"></ul>
+              </section>
+              <section aria-labelledby="ring-full-title">
+                <h4 id="ring-full-title">完整回看</h4>
+                <p id="ring-videos-empty" class="ring-replay-empty">暂无可回看的本轮录像。</p>
+                <ul id="ring-full-list" class="ring-video-list"></ul>
+              </section>
+            </div>
+          </section>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="settings-dialog" class="settings-dialog"><form id="settings-form"><div class="dialog-header"><div><h2>连接你的设备与模型</h2></div><button class="icon-button" type="button" data-close="settings-dialog" aria-label="关闭设置"><svg class="icon"><use href="#i-close"/></svg></button></div><p class="dialog-description">切换语音来源。手动开启预览，或发出画面描述指令后拍照。</p><label class="field-label" for="mode-select">工作模式</label><div class="select-wrap dialog-select"><select id="mode-select"><option value="demo">演示模式 · 无需设备和模型</option><option value="browser">电脑麦克风 · 浏览器语音识别</option><option value="service">音箱服务 · 真实设备采集</option></select><svg class="icon chevron"><use href="#i-chevron"/></svg></div><p class="field-help" id="mode-help">示例对话仅演示交互，不会调用大模型。</p><label class="field-label" for="service-url">电脑端服务地址</label><input id="service-url" type="url" placeholder="留空使用本地服务" autocomplete="off"><p class="field-help">留空使用本地服务。填写地址可连接已有的电脑端服务。</p><label class="field-label" for="video-url">音箱画面地址（可选）</label><input id="video-url" type="url" placeholder="http://127.0.0.1:8765/api/video.mjpeg" autocomplete="off"><p class="field-help">支持 MJPEG、图片流或浏览器可播放的视频地址。先启动设备视频服务。</p><div class="settings-result" id="settings-result" role="status">尚未检测服务</div><div class="dialog-footer"><button class="outline-button" type="button" id="test-connection">检测服务</button><button class="primary-button" type="submit">保存设置</button></div></form></dialog>
+
   <div class="toast" id="toast" role="status" hidden></div>
   <input id="audio-file" type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.webm" hidden>
   <input id="video-file" type="file" accept="video/*,.mp4,.webm,.mov" hidden>

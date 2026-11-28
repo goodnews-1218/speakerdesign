@@ -69,9 +69,16 @@ private:
     std::thread worker_;
     std::thread exporter_;
     Clock::time_point started_;
-    struct Highlight { unsigned id; uint64_t begin; uint64_t end; bool fromRing; };
+    struct Highlight {
+        unsigned id;
+        uint64_t begin;
+        uint64_t end;
+        bool fromRing;
+        unsigned ringEpisode;
+    };
     std::deque<Highlight> highlights_;
     unsigned highlightCount_ = 0;
+    unsigned ringEpisode_ = 0;
     ring::Reading ringReading_;
     std::atomic<uint64_t> audioBytes_{0};
     bool finalized_ = false;

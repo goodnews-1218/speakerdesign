@@ -110,6 +110,7 @@ class RingAlertTests(unittest.TestCase):
         self.assertEqual(flags, self.sound.SND_MEMORY | self.sound.SND_NODEFAULT)
         with wave.open(io.BytesIO(data), "rb") as alarm:
             self.assertEqual((alarm.getnchannels(), alarm.getsampwidth(), alarm.getframerate()), (1, 2, 24000))
+            self.assertAlmostEqual(alarm.getnframes() / alarm.getframerate(), 5.47, places=2)
             self.assertTrue(any(alarm.readframes(alarm.getnframes())))
 
     def test_only_one_alarm_across_batches_of_one_episode(self):

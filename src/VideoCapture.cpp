@@ -172,7 +172,12 @@ void VideoCapture::ringReading(ring::Reading reading) {
 
 void VideoCapture::ringAlert(std::optional<ring::Clock::time_point> onset,
                              ring::Clock::time_point now, bool active) {
-    if (fallAlert_) fallAlert_->pulse(onset, now, active);
+    if (!fallAlert_) return;
+    if (onset) {
+        std::lock_guard lock(mutex_);
+        ++ringEpisode_;
+    }
+    fallAlert_->pulse(onset, now, active);
 }
 
 uint64_t VideoCapture::frameAt(Clock::time_point time) const {
@@ -187,7 +192,8 @@ bool VideoCapture::queueHighlight(Clock::time_point begin, Clock::time_point end
         if (!recording_ || cameraFailed_ || encodeFailed_ || highlights_.size() >= 32) return false;
         constexpr auto padding = std::chrono::seconds(20);
         id = highlightCount_ + 1;
-        highlights_.push_back({id, frameAt(begin - padding), frameAt(end + padding), fromRing});
+        highlights_.push_back({id, frameAt(begin - padding), frameAt(end + padding),
+                               fromRing, fromRing ? ringEpisode_ : 0});
         highlightCount_ = id;
     }
     std::osyncstream(std::cout) << (fromRing ? "RING_HIGHLIGHT_MARKED=" : "HIGHLIGHT_MARKED=")
@@ -423,8 +429,14 @@ void VideoCapture::exportClips() noexcept {
             }
             if (highlight.id) {
                 const auto prefix = highlight.fromRing ? "highlight-ring-" : "highlight-";
-                exportClip(prefix + std::to_string(highlight.id) + ".mp4", highlight.begin,
-                           std::min(highlight.end, available), true);
+                const auto name = prefix + std::to_string(highlight.id) + ".mp4";
+                if (highlight.ringEpisode) {
+                    std::ofstream association(directory_ / (name + ".event"));
+                    association << highlight.ringEpisode << '\n';
+                    association.close();
+                    if (!association) std::cerr << "RING_HIGHLIGHT_LINK_FAILED=" << name << std::endl;
+                }
+                exportClip(name, highlight.begin, std::min(highlight.end, available), true);
                 continue;
             }
             if (nextSegment + segmentFrames <= available || (final && nextSegment < available)) {

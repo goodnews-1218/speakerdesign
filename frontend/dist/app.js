@@ -17,10 +17,9 @@
   };
   const savedConfig = storage.get('connect-studio-config', {});
   let config = { mode: ['demo', 'browser', 'service'].includes(savedConfig?.mode) ? savedConfig.mode : 'demo', serviceUrl: typeof savedConfig?.serviceUrl === 'string' ? savedConfig.serviceUrl : '', videoUrl: typeof savedConfig?.videoUrl === 'string' ? savedConfig.videoUrl : '' };
-  const rawHistory = storage.get('connect-studio-history', []);
-  let history = Array.isArray(rawHistory) ? rawHistory.filter((item) => item && typeof item.id === 'string' && typeof item.text === 'string' && typeof item.answer === 'string' && typeof item.time === 'number').slice(0, 30) : [];
   const uid = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  let currentId = uid(), answer = initialAnswer, answerQuestion = exampleQuestion, answerKind = 'demo', generation = 0, busy = false;
+  const currentId = uid();
+  let answer = initialAnswer, answerQuestion = exampleQuestion, answerKind = 'demo', generation = 0, busy = false;
   let recording = false, recordStarted = 0, recordTimer = null, recognition = null, eventSource = null;
   let serviceStatus = null, requestController = null, serviceCapture = null;
   let speechActive = false, speechVersion = 0, answerAudioUrl = '', cameraVersion = 0;
@@ -156,15 +155,15 @@
     $('footer-status').textContent = `${deviceText} · ${modelText}`;
   }
   function applyMode() {
-    const [audioSource, audioNote] = {
-      demo: ['演示输入', '演示模式使用示例文本，不会开启麦克风。'],
-      browser: ['电脑麦克风', '可以说“描述一下你看到的画面”。浏览器识别可能使用在线服务。'],
-      service: ['音箱采集服务', '开始录音后，说“描述一下你看到的画面”，然后结束录音。']
+    const copy = {
+      demo: ['演示模式', '普通对话使用示例。可单独使用“描述当前画面”。'],
+      browser: ['电脑麦克风', '使用电脑默认麦克风识别。']
     }[config.mode];
-    $('audio-source-label').textContent = audioSource;
-    $('audio-note').textContent = audioNote;
-    $('describe-help').textContent = '发送当前预览的一帧给 DeepSeek。未开启预览时，使用音箱摄像头拍照。';
-    $('audio-status').textContent = '准备好，开始说话'; refreshConnection();
+    $('mode-banner').hidden = !copy;
+    if (copy) {
+      ['mode-title', 'mode-description'].forEach((id, index) => { $(id).textContent = copy[index]; });
+    }
+    $('demo-button').hidden = config.mode !== 'demo'; $('audio-status').textContent = '准备好，开始说话'; refreshConnection();
   }
   function stopSpeech() {
     ++speechVersion;
@@ -224,40 +223,11 @@
     announceDescription('');
     setRecording(false); setBusy(false); stopSpeech();
   }
-  function remember(question, response, kind) {
-    const item = { id: currentId, text: question, answer: response, mode: kind, time: Date.now() };
-    history = [item, ...history.filter((old) => old.id !== currentId)].slice(0, 30);
-    if (!storage.set('connect-studio-history', history)) toast('浏览器未允许保存记录，本次对话仍可导出。');
-    renderHistory();
-  }
-  function renderHistory() {
-    $('history-count').textContent = String(history.length); $('recent-list').replaceChildren(); $('history-list').replaceChildren();
-    if (!history.length) {
-      const hint = document.createElement('p'); hint.className = 'history-empty'; hint.innerHTML = '从一句话开始，<br>让想法被听见。'; $('recent-list').append(hint);
-      const empty = document.createElement('p'); empty.className = 'field-help'; empty.textContent = '还没有对话记录。完成一轮对话后，会自动保存在这里。'; $('history-list').append(empty); return;
-    }
-    history.forEach((item, index) => {
-      if (index < 7) { const button = document.createElement('button'); button.className = 'recent-item'; button.innerHTML = icon('chat'); const label = document.createElement('span'); label.textContent = item.text; button.append(label); button.title = item.text; button.addEventListener('click', () => loadHistory(item)); $('recent-list').append(button); }
-      const row = document.createElement('div'); row.className = 'history-entry';
-      const button = document.createElement('button'); button.className = 'history-open'; const title = document.createElement('strong'); title.textContent = item.text;
-      const meta = document.createElement('span'); meta.textContent = `${new Date(item.time).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })} · ${item.mode === 'demo' ? '演示对话' : '模型对话'}`;
-      button.append(title, meta); button.addEventListener('click', () => loadHistory(item));
-      const remove = document.createElement('button'); remove.className = 'icon-button'; remove.innerHTML = icon('close'); remove.setAttribute('aria-label', `删除对话：${item.text.slice(0, 25)}`);
-      remove.addEventListener('click', () => { history = history.filter((old) => old.id !== item.id); storage.set('connect-studio-history', history); renderHistory(); });
-      row.append(button, remove); $('history-list').append(row);
-    });
-  }
-  async function loadHistory(item) {
-    await cancelWork(); currentId = item.id; answerQuestion = item.text;
-    setTranscript(item.text, '历史记录'); showAnswer(item.answer, item.mode);
-    $('audio-status').textContent = '已载入历史对话'; $('history-dialog').close();
-    selectMobilePanel('answer', true);
-  }
   function demoResponse(question) {
     if (/介绍|做什么|你好|能力/.test(question)) return initialAnswer;
     if (/画面|看到|摄像|桌面|拍照/.test(question)) return '当前这段是演示回答。\n\n选择“描述当前画面”，可以拍一张照片，发送给 DeepSeek 生成语音描述。';
     if (/计划|安排|工作|学习/.test(question)) return '可以，我们把事情拆成更容易开始的几步。\n\n1. 先确定今天最重要的一件事。\n2. 为它安排一段不被打扰的时间。\n3. 把剩余任务分成“今天做”和“以后做”。\n4. 结束前花几分钟回顾进展。\n\n这是预设演示内容。连接模型服务后，我会根据你的具体问题生成回答。';
-    return `我收到了你的问题：\n“${question}”\n\n这里演示的是“输入 → 识别文字 → 回答”的完整交互。你可以修改上方文字、查看历史记录，或点击朗读听听回答。\n\n当前没有调用大模型。这段内容是页面示例，连接模型服务后将显示真实回答。`;
+    return `我收到了你的问题：\n“${question}”\n\n你可以修改识别文字，或点击「朗读回答」听听效果。\n\n当前没有调用大模型。这段内容是页面示例，连接模型服务后将显示真实回答。`;
   }
   function isDescribeCommand(text) {
     const command = text.replace(/[\s，。！？、,.!?]/g, '')
@@ -374,7 +344,6 @@
       answerAudioUrl = localMediaUrl(response.audio_url);
       showDescriptionPhoto(localMediaUrl(response.image_url) || image);
       $('answer-badge').textContent = '画面描述';
-      remember(question, response.answer, 'model');
       setBusy(false);
       if (response.audio_deferred === true) {
         $('description-audio-status').hidden = false;
@@ -436,7 +405,7 @@
         result = resultData.answer; model = typeof resultData.model === 'string' ? resultData.model : '';
       }
       if (ticket !== generation) return;
-      answerQuestion = question; showAnswer(result, kind, model); remember(question, result, kind); $('audio-status').textContent = '回答已就绪，可以继续提问';
+      answerQuestion = question; showAnswer(result, kind, model); $('audio-status').textContent = '回答已就绪，可以继续提问';
     } catch (error) {
       if (ticket !== generation) return; emptyAnswer(error.message); $('answer-badge').textContent = '未能获取回答'; $('answer-badge').className = 'badge amber'; toast(error.message);
     } finally { if (ticket === generation) { setBusy(false); setFlow(''); requestController = null; } }
@@ -567,7 +536,7 @@
     if (file.size > 30 * 1024 * 1024) { toast('请选择小于 30 MB 的音频文件。'); return; }
     if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl); audioObjectUrl = URL.createObjectURL(file);
     $('audio-preview').src = audioObjectUrl; $('audio-preview').hidden = false;
-    $('audio-status').textContent = `已导入：${file.name}`; $('audio-source-label').textContent = '本地音频';
+    $('audio-status').textContent = `已导入：${file.name}`;
     if (config.mode === 'demo' || (!config.serviceUrl && !localService)) { toast('音频已导入，可在下方回听。真实转写需在连接设置中切换模式并接入服务。'); return; }
     const ticket = ++generation; setBusy(true); setFlow('read'); $('transcript-badge').textContent = '识别中'; requestController = new AbortController();
     try {
@@ -621,13 +590,13 @@
     if (videoObjectUrl) URL.revokeObjectURL(videoObjectUrl); videoObjectUrl = ''; cameraKind = '';
     $('camera-placeholder').hidden = false; $('video-stage').classList.remove('has-feed', 'has-playback');
     $('camera-state').textContent = '未开启'; $('camera-state').className = 'badge neutral'; $('camera-source-label').textContent = '尚未接入画面';
-    $('video-dimensions').textContent = '等待视频源'; $('snapshot-button').disabled = true; $('feed-label').textContent = 'CAMERA PREVIEW'; setCameraLoading(false);
+    $('video-dimensions').textContent = '等待视频源'; $('snapshot-button').disabled = true; $('feed-label').textContent = '摄像头预览'; setCameraLoading(false);
   }
   function cameraReady(kind, label, width, height) {
     clearTimeout(cameraTimeout); cameraKind = kind; setCameraLoading(false); $('camera-placeholder').hidden = true; $('video-stage').classList.add('has-feed');
     $('camera-state').textContent = kind === 'file' ? '本地回放' : '预览中'; $('camera-state').className = 'badge green';
     $('camera-source-label').textContent = label; $('video-dimensions').textContent = width && height ? `${width} × ${height}` : '实时画面';
-    $('snapshot-button').disabled = false; $('feed-label').textContent = kind === 'file' ? 'LOCAL PLAYBACK' : 'LIVE PREVIEW';
+    $('snapshot-button').disabled = false; $('feed-label').textContent = kind === 'file' ? '本地回放' : '实时预览';
   }
   function cameraFailure(message, ticket) { if (ticket !== cameraVersion) return; stopCamera(); $('camera-state').textContent = '连接失败'; $('camera-state').className = 'badge amber'; toast(message); }
   async function listCameras(selectedId) {
@@ -759,13 +728,6 @@
     if (automatic) announceDescription(message, true);
     else toast(message);
   }
-  async function newSession() {
-    await cancelWork(); currentId = uid(); setTranscript('', '等待输入'); emptyAnswer(); $('recording-time').textContent = '00:00'; $('audio-status').textContent = '新对话已准备好';
-    $('audio-preview').pause(); $('audio-preview').removeAttribute('src'); $('audio-preview').hidden = true;
-    if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl); audioObjectUrl = '';
-    selectMobilePanel('input'); $('transcript').focus();
-  }
-
   // UI binding. All model and recognition text is inserted as text, never as HTML.
   $('transcript').addEventListener('input', () => { updateCount(); $('transcript-badge').textContent = '可发送'; });
   $('send-button').addEventListener('click', sendQuestion);
@@ -787,7 +749,7 @@
   $('upload-button').addEventListener('click', () => { $('audio-file').value = ''; $('audio-file').click(); });
   $('audio-file').addEventListener('change', () => importAudio($('audio-file').files[0]));
   $('video-file').addEventListener('change', () => { const file = $('video-file').files[0]; if (file) startUrlCamera('', file); $('video-file').value = ''; });
-  ['settings-button', 'sidebar-settings'].forEach((id) => $(id).addEventListener('click', openSettings));
+  $('connection-settings').addEventListener('click', openSettings);
   document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => $(button.dataset.close).close()));
   $('mode-select').addEventListener('change', modeHelp);
   $('test-connection').addEventListener('click', async () => {
@@ -824,11 +786,6 @@
     const text = `声境 Connect · 对话记录\n时间：${new Date().toLocaleString('zh-CN')}\n内容来源：${answerKind === 'demo' ? '演示示例，并非真实模型回答' : '模型服务'}\n\n你说的话\n${answer ? answerQuestion : draft}\n\nAI 的回答\n${answer || '尚无回答'}\n${answer && draft !== answerQuestion ? `\n尚未回答的新输入\n${draft}\n` : ''}`;
     download(new Blob(['\uFEFF', text], { type: 'text/plain;charset=utf-8' }), `connect-conversation-${Date.now()}.txt`); toast('对话已导出。');
   });
-  $('new-session').addEventListener('click', newSession);
-  $('mobile-new').addEventListener('click', newSession);
-  $('mobile-history').addEventListener('click', () => { renderHistory(); $('history-dialog').showModal(); });
-  $('history-nav').addEventListener('click', () => { renderHistory(); $('history-dialog').showModal(); });
-  $('clear-history').addEventListener('click', () => { if (!history.length) return; history = []; storage.set('connect-studio-history', history); renderHistory(); toast('本机对话记录已清空。'); });
   document.addEventListener('connect:ring-opening', () => {
     if (cameraPending || (cameraKind && cameraKind !== 'file')) stopCamera();
   });
@@ -848,9 +805,10 @@
       return;
     }
     if ($('conversation-view').hidden) return;
-    const editing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
-    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !$('settings-dialog').open && !$('history-dialog').open) { event.preventDefault(); sendQuestion(); }
-    if (!editing && !event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === 'n' && !document.querySelector('dialog[open]')) { event.preventDefault(); newSession(); }
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !document.querySelector('dialog[open]')) {
+      event.preventDefault();
+      sendQuestion();
+    }
   });
   window.addEventListener('beforeunload', () => {
     discardServiceRecording();
@@ -859,7 +817,7 @@
   });
 
   for (let index = 0; index < 65; index++) { const bar = document.createElement('span'); const height = 5 + Math.abs(Math.sin(index * 1.72) * Math.sin(index * .31)) * 30; bar.style.setProperty('--bar-height', `${height}px`); bar.style.setProperty('--bar-delay', `${-(index % 9) * .09}s`); $('waveform').append(bar); }
-  updateCount(); renderHistory(); applyMode();
+  updateCount(); applyMode();
   if (config.mode !== 'demo') { setTranscript('', '等待输入'); emptyAnswer(); }
   checkSavedService();
 })();

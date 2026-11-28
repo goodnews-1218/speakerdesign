@@ -1,12 +1,13 @@
 """Expose one Connect ring recording session to the local dashboard."""
 
-from contextlib import nullcontext
+from contextlib import closing, nullcontext
 from datetime import datetime, timezone
 import json
 from os import fstat
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 from threading import Event, Lock, Thread
 from time import monotonic, sleep, time
 
@@ -18,6 +19,7 @@ from ring_alert import load_event, play_alarm, run_recorder
 ACTIVE_STATES = {"starting", "running", "stopping"}
 SESSION_NAME = re.compile(r"session-[0-9]+")
 EVENT_NAME = re.compile(r"event-([0-9]+)-([0-9]+)")
+EPISODE_NAME = re.compile(r"event-[0-9]+")
 VIDEO_NAME = re.compile(r"video\.mp4|highlight-ring-[0-9]+\.mp4|segments/segment-[0-9]+\.mp4")
 FRAME_NAME = re.compile(r"fall-alerts/(event-[0-9]+-[0-9]+)/frame-([0-9]{3})\.jpg")
 PREVIEW = "fall-alerts/preview.jpg"
@@ -243,6 +245,125 @@ def list_videos(session):
     return found
 
 
+def ring_clips(session):
+    return [path for path in session.glob("highlight-ring-*.mp4")
+            if VIDEO_NAME.fullmatch(path.name) and regular_file(session, path.name)]
+
+
+def event_recordings(session, events, active):
+    shared = ["video.mp4"] if regular_file(session, "video.mp4") else []
+    if not active and not shared:
+        segments = sorted(session.glob("segments/segment-*.mp4"), key=lambda path: path.name)
+        shared = [path.relative_to(session).as_posix() for path in segments
+                  if re.fullmatch(r"segment-[0-9]+\.mp4", path.name)
+                  and regular_file(session, path.relative_to(session).as_posix())]
+    clips = {event["id"]: [] for event in events}
+    for path in ring_clips(session):
+        association = regular_file(session, path.name + ".event")
+        if not association:
+            continue
+        try:
+            with association.open(encoding="ascii") as marker:
+                event_id = "event-" + marker.read(32).strip()
+        except (OSError, UnicodeError):
+            continue
+        if event_id in clips:
+            clips[event_id].append(path.name)
+    return {event_id: shared + paths for event_id, paths in clips.items()}
+
+
+class RingArchive:
+    def __init__(self, recordings):
+        self.recordings = recordings
+        self.path = recordings / "ring-events.sqlite3"
+        self.indexed = set()
+
+    def connect(self):
+        self.recordings.mkdir(parents=True, exist_ok=True)
+        return sqlite3.connect(self.path)
+
+    def refresh(self, session, active):
+        events, count, demo, analyze_demo = list_events(session, active, limit=None)
+        if events:
+            paths = event_recordings(session, events, active)
+            with closing(self.connect()) as db, db:
+                db.executemany("""INSERT INTO ring_event (session_id, event_id, session_number, payload, is_test)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(session_id, event_id) DO UPDATE SET
+                        payload=excluded.payload, is_test=excluded.is_test
+                    WHERE ring_event.payload <> excluded.payload OR ring_event.is_test <> excluded.is_test""",
+                    ((session.name, item["id"], int(session.name.split("-")[1]),
+                      json.dumps(item, ensure_ascii=False), item["demo"] or item["verdict"] == "demo")
+                     for item in events))
+                db.executemany("INSERT OR IGNORE INTO ring_video VALUES (?, ?, ?)",
+                               ((session.name, item["id"], name) for item in events for name in paths[item["id"]]))
+        if not active:
+            self.indexed.add(session.name)
+        return events[:24], count, demo, analyze_demo
+
+    def initialize(self):
+        with closing(self.connect()) as db, db:
+            db.executescript("""
+                CREATE TABLE IF NOT EXISTS ring_event (
+                    session_id TEXT NOT NULL, event_id TEXT NOT NULL, session_number INTEGER NOT NULL,
+                    payload TEXT NOT NULL, is_test INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (session_id, event_id)
+                );
+                CREATE INDEX IF NOT EXISTS ring_event_order ON ring_event (session_number DESC);
+                CREATE TABLE IF NOT EXISTS ring_video (
+                    session_id TEXT NOT NULL, event_id TEXT NOT NULL, path TEXT NOT NULL,
+                    PRIMARY KEY (session_id, event_id, path)
+                );
+            """)
+            db.execute("BEGIN IMMEDIATE")
+            if "is_test" not in {column[1] for column in db.execute("PRAGMA table_info(ring_event)")}:
+                db.execute("ALTER TABLE ring_event ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0")
+                db.execute("""UPDATE ring_event SET is_test=1
+                    WHERE CASE WHEN json_valid(payload) THEN
+                        json_type(payload, '$.demo') = 'true' OR json_extract(payload, '$.verdict') = 'demo'
+                    ELSE 0 END""")
+
+    def history(self, before, testing):
+        ceiling = min(before if before is not None else 1 << 63, (1 << 63) - 1)
+        scopes = (0, 1) if testing is None else (testing, testing)
+        with closing(self.connect()) as db:
+            floor = db.execute("""SELECT session_number FROM ring_event WHERE is_test IN (?, ?) AND session_number < ?
+                                  ORDER BY session_number DESC LIMIT 1 OFFSET 15""", (*scopes, ceiling)).fetchone()
+            minimum = floor[0] if floor else 0
+            rows = db.execute("""SELECT payload FROM ring_event WHERE is_test IN (?, ?) AND session_number < ? AND session_number >= ?
+                                  ORDER BY session_number DESC, length(event_id) DESC, event_id DESC""",
+                              (*scopes, ceiling, minimum)).fetchall()
+            older = floor and db.execute("SELECT 1 FROM ring_event WHERE is_test IN (?, ?) AND session_number < ? LIMIT 1",
+                                         (*scopes, minimum)).fetchone()
+        return {"events": [json.loads(row[0]) for row in rows], "next_before": minimum if older else None}
+
+    def detail(self, session, event, testing, active):
+        scopes = (0, 1) if testing is None else (testing, testing)
+        with closing(self.connect()) as db:
+            row = db.execute("SELECT payload FROM ring_event WHERE session_id=? AND event_id=? AND is_test IN (?, ?)",
+                             (session.name, event, *scopes)).fetchone()
+            if row is None:
+                return None
+            paths = db.execute("SELECT path FROM ring_video WHERE session_id=? AND event_id=?",
+                               (session.name, event)).fetchall()
+            if not active and not any(name.startswith("highlight-ring-") for (name,) in paths):
+                episodes = db.execute("SELECT event_id FROM ring_event WHERE session_id=? LIMIT 2",
+                                      (session.name,)).fetchall()
+                if episodes == [(event,)]:
+                    clips = ring_clips(session)
+                    if len(clips) == 1 and not clips[0].with_name(clips[0].name + ".event").exists():
+                        paths.append((clips[0].name,))
+        videos = [{"name": name, "url": media_url(session, name)} for (name,) in paths
+                  if VIDEO_NAME.fullmatch(name) and regular_file(session, name)]
+        videos.sort(key=lambda item: (
+            item["name"] != "video.mp4", item["name"].startswith("segments/"),
+            int(re.search(r"([0-9]+)\.mp4$", item["name"])[1]) if item["name"] != "video.mp4" else 0,
+        ))
+        if any(item["name"] == "video.mp4" for item in videos):
+            videos = [item for item in videos if not item["name"].startswith("segments/")]
+        return {"event": json.loads(row[0]), "videos": videos}
+
+
 class RingMonitorSession:
     def __init__(self, executable, device_args, recordings, client, device_lock, stop_playback, *,
                  priority_audio=nullcontext):
@@ -254,6 +375,9 @@ class RingMonitorSession:
         self.stop_playback = stop_playback
         self.priority_audio = priority_audio
         self.lock = Lock()
+        self.archive_lock = Lock()
+        self.archive = RingArchive(self.recordings)
+        self.archive_ready = False
         self.closed = False
         self.shutdown = Event()
         self.cancel = None
@@ -295,7 +419,11 @@ class RingMonitorSession:
                      "session": session.name if session else None,
                      "preview_url": None, "events": [], "videos": []}
         if session:
-            events, saved_warnings, saved_demo, saved_analyze_demo = list_events(session, reply["state"] in ACTIVE_STATES)
+            try:
+                events, saved_warnings, saved_demo, saved_analyze_demo = self.refresh_archive(session)
+            except (OSError, sqlite3.Error):
+                events, saved_warnings, saved_demo, saved_analyze_demo = list_events(session, reply["state"] in ACTIVE_STATES)
+                reply["error"] = reply["error"] or "预警数据库暂不可用，请检查录像目录写入权限。"
             reply["events"] = events
             saved_results = {batch["id"] for item in reply["events"] for batch in item["batches"]
                              if batch["verdict"] not in ("pending", "cancelled") and batch["alarm_state"] != "playing"}
@@ -315,26 +443,51 @@ class RingMonitorSession:
                     pass
         return reply
 
-    def history(self, before=None):
-        with self.lock:
-            session = self.session
-            active = self.state in ACTIVE_STATES
-        sessions = sorted(
-            ((int(path.name.split("-")[1]), path) for path in self.recordings.glob("session-*")
-             if SESSION_NAME.fullmatch(path.name) and path.is_dir() and not path.is_symlink()
-             and (path / "fall-alerts").is_dir() and not (path / "fall-alerts").is_symlink()),
-            reverse=True,
-        )
-        events = []
-        for number, path in sessions:
-            if before is not None and number >= before:
-                continue
-            if len(events) >= 16:
-                return {"events": events, "next_before": last}
-            saved, _, _, _ = list_events(path, active and path == session, limit=None)
-            events.extend(saved)
-            last = number
-        return {"events": events, "next_before": None}
+    def initialize_archive(self):
+        if not self.archive_ready:
+            self.archive.initialize()
+            self.archive_ready = True
+
+    def refresh_archive(self, session):
+        with self.archive_lock:
+            self.initialize_archive()
+            with self.lock:
+                active = self.session == session and self.state in ACTIVE_STATES
+            return self.archive.refresh(session, active)
+
+    def history(self, before=None, *, testing=False):
+        try:
+            with self.archive_lock:
+                self.initialize_archive()
+                with self.lock:
+                    session, active = self.session, self.state in ACTIVE_STATES
+                for path in self.recordings.glob("session-*"):
+                    alerts = path / "fall-alerts"
+                    if (SESSION_NAME.fullmatch(path.name) and path.name not in self.archive.indexed
+                            and not path.is_symlink() and alerts.is_dir() and not alerts.is_symlink()):
+                        self.archive.refresh(path, active and path == session)
+                return self.archive.history(before, testing)
+        except (OSError, sqlite3.Error) as error:
+            raise APIError("无法读取预警数据库，请检查录像目录。", 503) from error
+
+    def event_detail(self, request, *, testing=False):
+        name, _, event = request.partition("/")
+        if not SESSION_NAME.fullmatch(name) or not EPISODE_NAME.fullmatch(event):
+            raise APIError("找不到这条预警记录。", 404)
+        path = self.recordings / name
+        try:
+            with self.archive_lock:
+                self.initialize_archive()
+                with self.lock:
+                    active = self.session == path and self.state in ACTIVE_STATES
+                if (active or name not in self.archive.indexed) and not path.is_symlink():
+                    self.archive.refresh(path, active)
+                detail = self.archive.detail(path, event, testing, active)
+        except (OSError, sqlite3.Error) as error:
+            raise APIError("无法读取预警数据库，请检查录像目录。", 503) from error
+        if detail is None:
+            raise APIError("找不到这条预警记录。", 404)
+        return detail
 
     def current_camera_frame(self):
         with self.lock:
@@ -421,6 +574,12 @@ class RingMonitorSession:
                     self.state = "stopped"
                     if cancel.is_set() and not self.session:
                         self.error = None
+                session = self.session
+            if session:
+                try:
+                    self.refresh_archive(session)
+                except (OSError, sqlite3.Error) as failure:
+                    print(f"RING_ARCHIVE_ERROR={type(failure).__name__}", flush=True)
 
     def on_root(self, root):
         if SESSION_NAME.fullmatch(root.parent.name):

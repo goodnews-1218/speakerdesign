@@ -1,5 +1,7 @@
+from contextlib import closing
 import json
 from pathlib import Path
+import sqlite3
 import sys
 from tempfile import TemporaryDirectory
 from threading import Lock
@@ -154,6 +156,89 @@ class RingWebStatusTests(unittest.TestCase):
         self.assertEqual(event["after"], ["保持坐姿。"])
         self.assertIsNotNone(app.media("session-200/fall-alerts/event-1-1/frame-000.jpg"))
         self.assertIsNone(app.media("session-200/../session-217/fall-alerts/event-1-1/frame-000.jpg"))
+
+    def test_event_replay_links_survive_restart_without_crossing_episodes(self):
+        first = self.event({"verdict": "suspected_fall"}, times=(-2000, 1000))
+        second = self.event({"verdict": "no_visible_fall"}, episode=2)
+        self.event({"verdict": "suspected_fall"}, demo=True, session=201)
+        root = first.parents[1]
+        (root / "video.mp4").touch()
+        for clip, episode in ((2, 1), (3, 1), (5, 2)):
+            name = f"highlight-ring-{clip}.mp4"
+            (root / name).touch()
+            (root / (name + ".event")).write_text(f"{episode}\n", encoding="ascii")
+        (root / "highlight-ring-4.mp4").touch()
+
+        self.assertEqual(len(self.app().history()["events"]), 2)
+        self.assertTrue((self.recordings / "ring-events.sqlite3").is_file())
+        for batch in (first, second):
+            (batch / "ready").unlink()
+        restarted = self.app()
+        self.assertEqual(len(restarted.history()["events"]), 2)
+        first_detail = restarted.event_detail("session-200/event-1")
+        second_detail = restarted.event_detail("session-200/event-2")
+        self.assertEqual([item["name"] for item in first_detail["videos"]],
+                         ["video.mp4", "highlight-ring-2.mp4", "highlight-ring-3.mp4"])
+        self.assertEqual([item["name"] for item in second_detail["videos"]],
+                         ["video.mp4", "highlight-ring-5.mp4"])
+        self.assertEqual(len(first_detail["event"]["frames"]), 2)
+        with self.assertRaises(APIError) as missing:
+            restarted.event_detail("session-201/event-1")
+        self.assertEqual(missing.exception.status, 404)
+
+    def test_combined_history_includes_simulated_events_and_details_across_pages(self):
+        for session in range(200, 218):
+            self.event({"verdict": "uncertain"}, session=session, demo=session % 2 == 0)
+        app = self.app()
+        page = app.history(testing=None)
+        older = app.history(page["next_before"], testing=None)
+        events = page["events"] + older["events"]
+        self.assertEqual([item["session_id"] for item in events],
+                         [f"session-{session}" for session in reversed(range(200, 218))])
+        self.assertEqual([item["demo"] for item in events], [False, True] * 9)
+        self.assertIsNone(older["next_before"])
+        for event in older["events"]:
+            key = f"{event['session_id']}/{event['id']}"
+            self.assertEqual(app.event_detail(key, testing=None)["event"], event)
+
+    def test_legacy_clips_only_match_an_unambiguous_archived_episode(self):
+        root = self.event(session=200).parents[1]
+        clip = root / "highlight-ring-1.mp4"
+        clip.touch()
+        app = self.app()
+        self.assertEqual([item["name"] for item in app.event_detail("session-200/event-1")["videos"]],
+                         [clip.name])
+
+        self.event(session=200, episode=2)
+        app = self.app()
+        self.assertEqual(app.event_detail("session-200/event-1")["videos"], [])
+        self.assertEqual(app.event_detail("session-200/event-2")["videos"], [])
+
+    def test_legacy_archive_classifies_simulated_records_without_source_files(self):
+        app = self.app()
+        with closing(sqlite3.connect(app.archive.path)) as db, db:
+            db.execute("""CREATE TABLE ring_event (
+                session_id TEXT NOT NULL, event_id TEXT NOT NULL, session_number INTEGER NOT NULL,
+                payload TEXT NOT NULL, PRIMARY KEY (session_id, event_id))""")
+            db.executemany("INSERT INTO ring_event VALUES (?, ?, ?, ?)", (
+                ("session-200", "event-1", 200, '{"demo": false, "verdict": "uncertain"}'),
+                ("session-201", "event-1", 201, '{"demo": true, "verdict": "suspected_fall"}'),
+                ("session-202", "event-1", 202, '{"verdict": "demo"}'),
+            ))
+        self.assertEqual(len(app.history()["events"]), 1)
+        self.assertEqual(len(app.history(testing=True)["events"]), 2)
+        self.assertEqual(len(app.history(testing=None)["events"]), 3)
+
+    def test_completed_session_adds_playback_after_a_live_event(self):
+        event = self.event({"verdict": "uncertain"})
+        app = self.app()
+        app.state = "running"
+        self.assertEqual(app.event_detail("session-200/event-1")["videos"], [])
+        root = event.parents[1]
+        (root / "video.mp4").touch()
+        app.state = "stopped"
+        detail = app.event_detail("session-200/event-1")
+        self.assertEqual([item["name"] for item in detail["videos"]], ["video.mp4"])
 
     @patch("ring_web.play_alarm")
     def test_audition_is_local_and_releases_device_after_failure(self, play_alarm):
